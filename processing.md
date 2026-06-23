@@ -1,40 +1,18 @@
 # processing.md
 
-각 util 코드의 최신 버전을 정리하는 인덱스 문서. 새 작업을 시작하기 전에 먼저 확인한다. [CLAUDE.md](CLAUDE.md) 참고.
-
-기록 형식:
-
-```
-## <util 이름>
-- 경로: utils/<util_name>/
-- 목적: 한 줄 설명
-- 버전: vX (날짜)
-- 사용법: 실행 커맨드/예시
-- 상태: 진행중 / 완료 / 보류
-- 비고: 알아두면 좋은 제약/edge case
-```
+`utils/` 폴더에 어떤 util(프로그램)들이 있는지 한눈에 보여주는 인덱스 문서. 각 util의 상세 내용(알고리즘/사용법/버전/제약)은 해당 util 폴더의 `processing.md`에 있다. 새 작업을 시작하기 전에 이 문서로 전체 목록을 먼저 확인한 뒤, 관련 util의 상세 문서를 읽는다. [CLAUDE.md](CLAUDE.md) 참고.
 
 ---
 
-## crop_locator
-- 경로: `utils/crop_locator/`
-  - `matcher.py`: 핵심 매칭 로직 (template matching + NMS + pixel-by-pixel 검증)
-  - `gui.py`: PyQt5 GUI (실행 진입점)
-- 목적: 원본 이미지(bmp/png) 안에서 crop된 이미지(들)의 위치(x, y, w, h)를 찾는다. w, h는 crop 이미지의 shape에서 결정.
-- 버전: v1 (2026-06-19)
-- 사용법:
-  ```
-  cd "E:\46 util"
-  .venv\Scripts\python.exe utils\crop_locator\gui.py
-  ```
-  GUI에서 원본 이미지 1개, crop 이미지 1개 이상 선택 → colorspace(gray/color, 기본 gray) / Top-K(기본 5) / NMS 거리(기본: 자동 = 템플릿 min(w,h)/2) / dry-run 여부 설정 → "실행" 버튼.
-- 알고리즘:
-  1. `cv2.matchTemplate` (TM_CCOEFF_NORMED)로 score map 계산
-  2. score가 가장 높은 지점을 고르고 주변(반경 = NMS 거리)을 억제하는 과정을 top-k번 반복 → 서로 겹치지 않는 top-k 후보 확보
-  3. score 높은 순서대로 원본에서 동일 크기로 잘라 `np.array_equal`로 완전 동일 여부 검사
-  4. 처음으로 완전히 일치하는 후보를 결과로 확정 (x, y, w, h, score). 5개 모두 불일치하면 "찾지 못함" 처리
-- dry-run 동작: 각 후보의 score/좌표/pixel-match 결과를 모두 로그에 출력하되, 최종 `[RESULT]` 확정 라인은 출력하지 않음.
-- 상태: 완료 (서브에이전트 검증 통과, 버그 없음)
-- 비고:
-  - `gui.py`는 같은 폴더의 `matcher.py`를 `from matcher import ...`로 import하므로, **스크립트로 직접 실행**해야 한다 (다른 위치에서 모듈로 import하면 `ModuleNotFoundError` 발생).
-  - TM_CCOEFF_NORMED 특성상 완전 일치 영역은 항상 score=1.0이므로, 완전 일치가 존재하면 항상 최상위 후보로 검출됨. "후보 누락으로 못 찾는" 경우는 NMS 억제 반경 안에 더 높은 score의 가짜 후보가 있어 정답 위치 자체가 top-k에서 빠지는 경우에 발생할 수 있음 (topk를 늘리거나 NMS 거리를 줄이면 완화 가능).
+## util 목록
+
+| util | 설명 | 상세 문서 |
+| --- | --- | --- |
+| crop_locator | 원본 이미지(bmp/png) 안에서 crop된 이미지(들)의 위치(x, y, w, h)를 template matching + NMS + pixel-by-pixel 검증으로 찾는 PyQt5 GUI 도구 | [utils/crop_locator/processing.md](utils/crop_locator/processing.md) |
+| TTTM (RAW_Image_Comparator) | 16-bit 단채널 RAW 이미지 2장을 Threshold/ROI/Blob 분석으로 비교하는 PyQt5 데스크탑 GUI (다른 작업 환경에서 이관됨) | [utils/TTTM/processing.md](utils/TTTM/processing.md) |
+
+---
+
+새 util을 추가하거나 기존 util을 변경하면:
+1. 해당 util 폴더의 `processing.md`(상세)를 작성/갱신한다.
+2. 위 표에 한 줄 요약 + 링크를 추가/갱신한다.

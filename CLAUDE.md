@@ -38,27 +38,32 @@
 - push 전에 반드시 사용자에게 "GitHub에 push할지" 확인을 요청한다.
 - 사용자가 동의한 경우에만 push한다. 동의 없이 임의로 push하지 않는다.
 
-## 버그 / QA 기록 — `QA.md`
+## 버그 / QA 기록 — util별 `QA.md`
 
-- 작업 중 발견된 버그, 이상 동작, 검증 실패 사례는 `QA.md`에 정리하여 업데이트한다.
-- 형식: 발생 일자, 관련 util, 증상, 원인, 해결 방법(또는 미해결 상태) 순으로 기록한다.
+- 각 util(`utils/<util_name>/`)은 자신의 폴더 안에 자기 전용 `QA.md`를 가진다.
+- 그 util 작업 중 발견된 버그, 이상 동작, 검증 실패 사례는 해당 util의 `QA.md`에 정리하여 업데이트한다.
+- 형식: 발생 일자, 증상, 원인, 해결 방법(또는 미해결 상태) 순으로 기록한다.
+- 저장소 루트의 `QA.md`는 **인덱스 문서**다. util별 한 줄 요약과 그 util의 `QA.md`로의 링크만 남기고, 상세 내용은 두지 않는다. 새 util을 추가하거나 그 util에서 버그를 기록할 때마다 루트 `QA.md`의 인덱스도 함께 갱신한다.
 
-## util 코드 현황 — `processing.md`
+## util 코드 현황 — util별 `processing.md` + 루트 `processing.md`
 
-- `processing.md`는 각 util 코드의 **최신 버전 현황을 정리하는 인덱스 문서**다.
-- 새로운 util을 만들거나 기존 util을 변경하면 `processing.md`를 함께 업데이트한다.
-- 이 문서를 보면 각 util의 목적, 사용법, 현재 상태를 빠르게 파악할 수 있어야 한다.
-- 새 작업을 시작하기 전에 `processing.md`를 먼저 확인해서 기존 구현/관례를 참고한다.
+- 각 util은 자신의 폴더 안에 자기 전용 `processing.md`를 가지고, 그 util의 목적/알고리즘/사용법/버전/상태/제약사항 등 상세 정보를 기록한다.
+- 저장소 루트의 `processing.md`는 **인덱스 문서**다. `utils/` 폴더에 어떤 util들이 있는지, 각각 무엇을 하는 프로그램인지 한두 줄로 요약하고 해당 util의 상세 `processing.md`로 링크한다.
+- 새로운 util을 만들거나 기존 util을 변경하면 그 util의 `processing.md`(상세)와 루트 `processing.md`(인덱스 한 줄)를 함께 업데이트한다.
+- 새 작업을 시작하기 전에 루트 `processing.md`로 전체 목록을 먼저 훑고, 관련 util의 상세 `processing.md`를 읽어 기존 구현/관례를 참고한다.
 
 ## 디렉토리 구조
 
 ```
 46 util/
 ├── CLAUDE.md          # 이 워크플로우 문서
-├── QA.md              # 버그/이슈 기록
-├── processing.md      # util별 최신 버전 인덱스
+├── QA.md              # 전체 util QA 인덱스 (상세는 각 util 폴더의 QA.md)
+├── processing.md      # 전체 util 인덱스 (상세는 각 util 폴더의 processing.md)
 ├── requirements.txt   # 공용 의존성
 ├── .venv/             # Python 3.12 가상환경 (공용)
 └── utils/
     └── <util_name>/   # 개별 util 코드
+        ├── QA.md         # 이 util의 버그/이슈 상세 기록
+        ├── processing.md # 이 util의 목적/사용법/버전 상세 기록
+        └── ...           # 코드
 ```

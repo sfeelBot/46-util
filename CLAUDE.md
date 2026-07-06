@@ -7,6 +7,11 @@
 - Python **3.12** 고정. 가상환경은 저장소 루트의 `.venv` 사용 (`py -3.12 -m venv .venv`).
 - 모든 명령은 가상환경 안에서 실행한다.
   - Windows: `.venv\Scripts\python.exe`, `.venv\Scripts\pip.exe`
+- **`.venv`는 `.gitignore`에 등록되어 있으며 git에 포함하지 않는다.** 저장소를 clone한 뒤 로컬에서 직접 생성한다:
+  ```
+  py -3.12 -m venv .venv
+  .venv\Scripts\python.exe -m pip install -r requirements.txt
+  ```
 - 새 패키지를 추가하면 `requirements.txt`에 반영한다.
 - util마다 별도의 venv를 만들지 않는다. 저장소 전체가 하나의 `.venv`를 공유한다.
 
@@ -36,6 +41,7 @@
 
 - 검증이 끝났다고 해서 바로 push하지 않는다.
 - push 전에 반드시 사용자에게 "GitHub에 push할지" 확인을 요청한다.
+- push 전에 READ.md 파일 및 processing.md 파일을 업데이트한 뒤, 해당 내용을 같이 push 할 수 있도록 한다.
 - 사용자가 동의한 경우에만 push한다. 동의 없이 임의로 push하지 않는다.
 
 ## 버그 / QA 기록 — util별 `QA.md`

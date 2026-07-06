@@ -1,2 +1,5 @@
+# 가상환경 (각자 로컬에서 py -3.12 -m venv .venv 로 생성)
+.venv/
+
 __pycache__/
 *.pyc

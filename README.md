@@ -43,3 +43,31 @@ Template matching → NMS로 상위 후보 추출 → score 높은 순으로 pix
 ```bash
 .venv\Scripts\python.exe utils\TTTM\main.py
 ```
+
+### raw_flipper
+
+폴더 내 이미지 파일(RAW/PNG/BMP 등)을 재귀 탐색하여 일괄 상하반전 후 동일한 폴더 구조로 결과 폴더에 저장하는 PyQt5 GUI 도구.
+자세한 내용은 [utils/raw_flipper/processing.md](utils/raw_flipper/processing.md) 참고.
+
+```bash
+.venv\Scripts\python.exe utils\raw_flipper\main.py
+```
+
+### image_cropper
+
+폴더 내 이미지(JPG/PNG/BMP/TIFF/RAW 16-bit)에서 복수 ROI를 GUI로 지정해 크롭 저장하는 PyQt5 도구. 파일명에 XYWH 좌표 포함.
+자세한 내용은 [utils/image_cropper/processing.md](utils/image_cropper/processing.md) 참고.
+
+```bash
+.venv\Scripts\python.exe utils\image_cropper\main.py
+```
+
+### signal_noise_analyzer
+
+이미지 ROI에서 이진화(Threshold)를 기반으로 Signal / Noise1(σ_bg) / Noise2(bg_mean−bg_min)를 실시간 측정·저장하는 PyQt5 GUI 도구.
+폴더 탭 관리, 줌/패닝 뷰어, 이진화 오버레이, 라인 프로파일 차트, 결과 트리(선택 저장/전체 저장 CSV) 제공.
+자세한 내용은 [utils/signal_noise_analyzer/processing.md](utils/signal_noise_analyzer/processing.md) 참고.
+
+```bash
+.venv\Scripts\python.exe utils\signal_noise_analyzer\main.py
+```

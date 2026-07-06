@@ -12,6 +12,7 @@
 | TTTM (RAW_Image_Comparator) | 16-bit 단채널 RAW 이미지 2장을 Threshold/ROI/Blob 분석으로 비교하는 PyQt5 데스크탑 GUI (다른 작업 환경에서 이관됨) | [utils/TTTM/processing.md](utils/TTTM/processing.md) |
 | raw_flipper | 폴더 내 이미지 파일(RAW/PNG/BMP 등)을 재귀 탐색하여 일괄 상하반전 후 동일한 폴더 구조로 결과 폴더에 저장하는 PyQt5 GUI 도구 | [utils/raw_flipper/processing.md](utils/raw_flipper/processing.md) |
 | image_cropper | 폴더 내 이미지(JPG/PNG/BMP/TIFF/RAW 16-bit)에서 복수 ROI를 GUI로 지정해 크롭 저장하는 PyQt5 도구. 파일명에 XYWH 좌표 포함 | [utils/image_cropper/processing.md](utils/image_cropper/processing.md) |
+| signal_noise_analyzer | 이미지 ROI를 이진화(threshold)하여 Signal / Noise1(σ_bg) / Noise2(bg_mean−bg_min)를 실시간 측정·저장하는 PyQt5 GUI 도구. 라인 프로파일, 폴더 탭, 결과 트리 제공 | [utils/signal_noise_analyzer/processing.md](utils/signal_noise_analyzer/processing.md) |
 
 ---
 

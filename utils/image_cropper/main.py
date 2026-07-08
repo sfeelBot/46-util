@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import struct
 import numpy as np
 from pathlib import Path
@@ -9,7 +10,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QListWidget, QListWidgetItem, QGraphicsView,
     QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem, QGraphicsPixmapItem,
     QSpinBox, QFileDialog, QMessageBox, QSizePolicy, QLineEdit,
-    QGroupBox, QFormLayout, QSplitter, QFrame, QProgressDialog
+    QGroupBox, QFormLayout, QSplitter, QFrame, QProgressDialog, QAbstractItemView
 )
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal, QObject
 from PyQt5.QtGui import (
@@ -17,6 +18,24 @@ from PyQt5.QtGui import (
 )
 
 SUPPORTED_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.raw'}
+
+# Matches the filename suffix produced by save_crop(): "..._{idx}_x{x}y{y}w{w}h{h}"
+REFERENCE_NAME_PATTERN = re.compile(r'_(?P<idx>\d+)_x(?P<x>\d+)y(?P<y>\d+)w(?P<w>\d+)h(?P<h>\d+)$')
+
+
+def parse_reference_filename(path: Path):
+    """Parse (idx, x, y, w, h) from a filename following save_crop's naming
+    convention. Returns a dict or None if the filename doesn't match."""
+    m = REFERENCE_NAME_PATTERN.search(path.stem)
+    if not m:
+        return None
+    return {
+        'idx': int(m.group('idx')),
+        'x': int(m.group('x')),
+        'y': int(m.group('y')),
+        'w': int(m.group('w')),
+        'h': int(m.group('h')),
+    }
 
 
 def load_image_as_qpixmap(path: Path, raw_w: int = 0, raw_h: int = 0):
@@ -103,13 +122,16 @@ def save_crop(src_path: Path, roi_idx: int, x: int, y: int, w: int, h: int,
 
 
 class ROIItem(QGraphicsRectItem):
-    """A draggable ROI rectangle with a centered index label."""
+    """A ROI rectangle with a centered index label. Selectable via ImageViewer's click handling."""
 
     def __init__(self, idx: int, rect: QRectF):
         super().__init__(rect)
-        pen = QPen(QColor(255, 80, 80), 2, Qt.SolidLine)
-        pen.setCosmetic(True)
-        self.setPen(pen)
+        self.idx = idx
+        self._normal_pen = QPen(QColor(255, 80, 80), 2, Qt.SolidLine)
+        self._normal_pen.setCosmetic(True)
+        self._selected_pen = QPen(QColor(255, 230, 0), 3, Qt.SolidLine)
+        self._selected_pen.setCosmetic(True)
+        self.setPen(self._normal_pen)
         self.setBrush(QBrush(QColor(255, 80, 80, 40)))
 
         self._label = QGraphicsTextItem(str(idx), self)
@@ -122,6 +144,14 @@ class ROIItem(QGraphicsRectItem):
         super().setRect(rect)
         self._update_label()
 
+    def set_idx(self, idx: int):
+        self.idx = idx
+        self._label.setPlainText(str(idx))
+        self._update_label()
+
+    def set_selected_style(self, selected: bool):
+        self.setPen(self._selected_pen if selected else self._normal_pen)
+
     def _update_label(self):
         r = self.rect()
         br = self._label.boundingRect()
@@ -132,9 +162,11 @@ class ROIItem(QGraphicsRectItem):
 
 
 class ImageViewer(QGraphicsView):
-    """Zoomable/pannable viewer. Emits roi_drawn(idx, QRectF) on each ROI finish."""
+    """Zoomable/pannable viewer. Emits roi_drawn(idx, QRectF) on each ROI finish,
+    and roi_selected(idx, x, y, w, h) when a ROI is clicked (idx=-1 on deselect)."""
 
     roi_drawn = pyqtSignal(int, QRectF)
+    roi_selected = pyqtSignal(int, int, int, int, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -149,6 +181,7 @@ class ImageViewer(QGraphicsView):
         self._roi_items: list[ROIItem] = []
         self._roi_count = 1
         self._next_roi_idx = 1
+        self._selected_item: ROIItem | None = None
 
         # drawing state
         self._drawing = False
@@ -162,18 +195,21 @@ class ImageViewer(QGraphicsView):
     # ------------------------------------------------------------------ public
 
     def set_roi_count(self, n: int):
+        """Update the target ROI count only. Does NOT clear existing ROIs."""
         self._roi_count = n
-        self.clear_rois()
+        self._recompute_next_idx()
 
     def clear_rois(self):
         for item in self._roi_items:
             self._scene.removeItem(item)
         self._roi_items.clear()
+        self._selected_item = None
         self._next_roi_idx = 1
 
     def load_pixmap(self, pixmap: QPixmap):
         self._scene.clear()
         self._roi_items.clear()
+        self._selected_item = None
         self._next_roi_idx = 1
         self._pixmap_item = QGraphicsPixmapItem(pixmap)
         self._scene.addItem(self._pixmap_item)
@@ -185,17 +221,90 @@ class ImageViewer(QGraphicsView):
         result = []
         for item in self._roi_items:
             r = item.rect()
-            idx = int(item._label.toPlainText())
             x = max(0, int(r.x()))
             y = max(0, int(r.y()))
             w = max(1, int(r.width()))
             h = max(1, int(r.height()))
-            result.append((idx, x, y, w, h))
+            result.append((item.idx, x, y, w, h))
         result.sort(key=lambda t: t[0])
         return result
 
     def has_all_rois(self) -> bool:
         return len(self._roi_items) == self._roi_count
+
+    def find_roi_by_idx(self, idx: int) -> "ROIItem | None":
+        for item in self._roi_items:
+            if item.idx == idx:
+                return item
+        return None
+
+    def get_selected_idx(self):
+        return self._selected_item.idx if self._selected_item else None
+
+    def select_roi(self, idx: int):
+        """Programmatically select (highlight) the ROI at idx, if it exists."""
+        self._select_item(self.find_roi_by_idx(idx))
+
+    def set_roi(self, idx: int, x: int, y: int, w: int, h: int) -> bool:
+        """Create or replace the ROI at idx with the given pixel-coord rect
+        (clamped to image bounds). Returns False if no image loaded or the
+        clamped rect collapses to nothing."""
+        if self._pixmap_item is None or w <= 0 or h <= 0:
+            return False
+        rect = self._clamp_rect(QRectF(x, y, w, h))
+        if rect.width() < 1 or rect.height() < 1:
+            return False
+
+        existing = self.find_roi_by_idx(idx)
+        if existing is not None:
+            if self._selected_item is existing:
+                self._selected_item = None
+            self._scene.removeItem(existing)
+            self._roi_items.remove(existing)
+
+        roi = ROIItem(idx, rect)
+        self._scene.addItem(roi)
+        self._roi_items.append(roi)
+        self._recompute_next_idx()
+        return True
+
+    def remove_roi(self, idx: int) -> bool:
+        item = self.find_roi_by_idx(idx)
+        if item is None:
+            return False
+        if self._selected_item is item:
+            self._selected_item = None
+        self._scene.removeItem(item)
+        self._roi_items.remove(item)
+        self._recompute_next_idx()
+        return True
+
+    # ------------------------------------------------------------------ internal helpers
+
+    def _clamp_rect(self, rect: QRectF) -> QRectF:
+        if self._pixmap_item:
+            rect = rect.intersected(self._pixmap_item.boundingRect())
+        return rect
+
+    def _recompute_next_idx(self):
+        used = {item.idx for item in self._roi_items}
+        n = 1
+        while n in used:
+            n += 1
+        self._next_roi_idx = n
+
+    def _select_item(self, item: "ROIItem | None"):
+        if self._selected_item is item:
+            return
+        if self._selected_item is not None:
+            self._selected_item.set_selected_style(False)
+        self._selected_item = item
+        if item is not None:
+            item.set_selected_style(True)
+            r = item.rect()
+            self.roi_selected.emit(item.idx, int(r.x()), int(r.y()), int(r.width()), int(r.height()))
+        else:
+            self.roi_selected.emit(-1, 0, 0, 0, 0)
 
     # ------------------------------------------------------------------ events
 
@@ -210,15 +319,28 @@ class ImageViewer(QGraphicsView):
             self.setCursor(Qt.ClosedHandCursor)
             return
         if event.button() == Qt.LeftButton and self._pixmap_item:
+            scene_pos = self.mapToScene(event.pos())
+
+            # Hit-test existing ROIs (topmost/most-recently-added first) → select, don't draw
+            hit = None
+            for item in reversed(self._roi_items):
+                if item.rect().contains(scene_pos):
+                    hit = item
+                    break
+            if hit is not None:
+                self._select_item(hit)
+                return
+
+            self._select_item(None)
             if self._next_roi_idx <= self._roi_count:
                 self._drawing = True
-                self._draw_start = self.mapToScene(event.pos())
+                self._draw_start = scene_pos
                 pen = QPen(QColor(255, 80, 80), 2, Qt.DashLine)
                 pen.setCosmetic(True)
                 self._temp_rect = QGraphicsRectItem(QRectF(self._draw_start, self._draw_start))
                 self._temp_rect.setPen(pen)
                 self._scene.addItem(self._temp_rect)
-                return
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -250,25 +372,11 @@ class ImageViewer(QGraphicsView):
             if rect.width() < 2 or rect.height() < 2:
                 return
 
-            # Clamp to image bounds
-            if self._pixmap_item:
-                img_rect = self._pixmap_item.boundingRect()
-                rect = rect.intersected(img_rect)
-
             idx = self._next_roi_idx
-
-            # Replace existing ROI with same index if present
-            existing = [i for i, item in enumerate(self._roi_items)
-                        if int(item._label.toPlainText()) == idx]
-            for i in reversed(existing):
-                self._scene.removeItem(self._roi_items[i])
-                self._roi_items.pop(i)
-
-            roi = ROIItem(idx, rect)
-            self._scene.addItem(roi)
-            self._roi_items.append(roi)
-            self._next_roi_idx = idx + 1
-            self.roi_drawn.emit(idx, rect)
+            x, y, w, h = int(rect.x()), int(rect.y()), int(rect.width()), int(rect.height())
+            if self.set_roi(idx, x, y, w, h):
+                item = self.find_roi_by_idx(idx)
+                self.roi_drawn.emit(idx, item.rect())
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):
@@ -288,6 +396,7 @@ class MainWindow(QMainWindow):
         self._current_np = None
         self._raw_w = 0
         self._raw_h = 0
+        self._reference_rois: list[dict] = []
 
         self._build_ui()
 
@@ -311,7 +420,7 @@ class MainWindow(QMainWindow):
 
         toolbar.addWidget(QLabel('  ROI 개수:'))
         self._spin_roi = QSpinBox()
-        self._spin_roi.setRange(1, 20)
+        self._spin_roi.setRange(1, 999)
         self._spin_roi.setValue(1)
         self._spin_roi.setFixedWidth(60)
         self._spin_roi.valueChanged.connect(self._on_roi_count_changed)
@@ -351,7 +460,31 @@ class MainWindow(QMainWindow):
         self._file_list = QListWidget()
         self._file_list.setMinimumWidth(180)
         self._file_list.currentRowChanged.connect(self._on_file_selected)
-        list_layout.addWidget(self._file_list)
+        list_layout.addWidget(self._file_list, 1)
+
+        # Reference images (parse XYWH from filename → load as ROIs)
+        list_layout.addWidget(QLabel('레퍼런스 이미지 (파일명에서 XYWH 파싱)'))
+        self._ref_list = QListWidget()
+        self._ref_list.setMinimumWidth(180)
+        self._ref_list.setMaximumHeight(160)
+        self._ref_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._ref_list.setToolTip('선택 없이 "ROI 불러오기"를 누르면 목록 전체가 적용됩니다.')
+        list_layout.addWidget(self._ref_list)
+
+        ref_btn_row = QHBoxLayout()
+        btn_ref_add = QPushButton('추가')
+        btn_ref_add.clicked.connect(self._on_add_reference)
+        btn_ref_clear = QPushButton('목록 지우기')
+        btn_ref_clear.clicked.connect(self._on_clear_reference)
+        ref_btn_row.addWidget(btn_ref_add)
+        ref_btn_row.addWidget(btn_ref_clear)
+        list_layout.addLayout(ref_btn_row)
+
+        btn_ref_load = QPushButton('ROI 불러오기')
+        btn_ref_load.setStyleSheet('background:#8a4fd0;color:white;font-weight:bold;')
+        btn_ref_load.clicked.connect(self._on_load_reference_rois)
+        list_layout.addWidget(btn_ref_load)
+
         splitter.addWidget(list_frame)
 
         # Viewer
@@ -361,12 +494,43 @@ class MainWindow(QMainWindow):
 
         self._viewer = ImageViewer()
         self._viewer.roi_drawn.connect(self._on_roi_drawn)
+        self._viewer.roi_selected.connect(self._on_roi_selected)
         viewer_layout.addWidget(self._viewer, 1)
 
         # ROI status label
         self._lbl_roi = QLabel('ROI: 0 / 1')
         self._lbl_roi.setAlignment(Qt.AlignCenter)
         viewer_layout.addWidget(self._lbl_roi)
+
+        # ROI 편집: 캔버스에서 ROI를 클릭하면 아래 값이 채워짐. 번호를 바꿔 [적용]하면
+        # 그 번호로 재지정(덮어쓰기)되고, XYWH를 바꿔 [적용]하면 좌표가 수정된다.
+        roi_edit_group = QGroupBox('ROI 편집 (선택 후 수정 / 숫자로 직접 지정)')
+        roi_edit_layout = QHBoxLayout(roi_edit_group)
+        roi_edit_layout.setContentsMargins(6, 4, 6, 4)
+
+        def _labeled_spin(label, minv, maxv):
+            roi_edit_layout.addWidget(QLabel(label))
+            spin = QSpinBox()
+            spin.setRange(minv, maxv)
+            spin.setFixedWidth(70)
+            roi_edit_layout.addWidget(spin)
+            return spin
+
+        self._spin_edit_idx = _labeled_spin('번호:', 1, 999)
+        self._spin_edit_x = _labeled_spin('X:', 0, 999999)
+        self._spin_edit_y = _labeled_spin('Y:', 0, 999999)
+        self._spin_edit_w = _labeled_spin('W:', 1, 999999)
+        self._spin_edit_h = _labeled_spin('H:', 1, 999999)
+
+        btn_apply_roi = QPushButton('적용 (생성/수정)')
+        btn_apply_roi.clicked.connect(self._on_apply_manual_roi)
+        btn_delete_roi = QPushButton('선택 ROI 삭제')
+        btn_delete_roi.clicked.connect(self._on_delete_roi)
+        roi_edit_layout.addWidget(btn_apply_roi)
+        roi_edit_layout.addWidget(btn_delete_roi)
+        roi_edit_layout.addStretch()
+
+        viewer_layout.addWidget(roi_edit_group)
 
         # Crop buttons
         btn_row = QHBoxLayout()
@@ -426,6 +590,73 @@ class MainWindow(QMainWindow):
         self._viewer.set_roi_count(val)
         self._update_roi_label()
 
+    def _on_add_reference(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, '레퍼런스 이미지 선택 (파일명에서 XYWH 파싱)',
+            str(self._folder or Path.home()),
+            '이미지 파일 (*.jpg *.jpeg *.png *.bmp *.tif *.tiff);;모든 파일 (*)'
+        )
+        if not files:
+            return
+        existing = {e['path'] for e in self._reference_rois}
+        for f in files:
+            p = Path(f)
+            if str(p) in existing:
+                continue
+            parsed = parse_reference_filename(p)
+            entry = {'path': str(p), 'name': p.name, 'valid': parsed is not None}
+            if parsed:
+                entry.update(parsed)
+            self._reference_rois.append(entry)
+        self._refresh_reference_list()
+
+    def _refresh_reference_list(self):
+        self._ref_list.clear()
+        for e in self._reference_rois:
+            if e['valid']:
+                text = f"[{e['idx']}] {e['name']}  (x{e['x']} y{e['y']} w{e['w']} h{e['h']})"
+            else:
+                text = f"⚠ 파싱 실패: {e['name']}"
+            self._ref_list.addItem(QListWidgetItem(text))
+
+    def _on_clear_reference(self):
+        self._reference_rois.clear()
+        self._ref_list.clear()
+
+    def _on_load_reference_rois(self):
+        if not self._current_path:
+            QMessageBox.warning(self, '경고', '이미지를 먼저 선택하세요.')
+            return
+        if not self._reference_rois:
+            QMessageBox.warning(self, '경고', '레퍼런스 이미지를 먼저 추가하세요.')
+            return
+
+        selected_rows = {i.row() for i in self._ref_list.selectedIndexes()}
+        targets = [self._reference_rois[r] for r in selected_rows] if selected_rows \
+            else self._reference_rois
+        valid_targets = [e for e in targets if e['valid']]
+
+        if not valid_targets:
+            QMessageBox.warning(self, '경고', '불러올 수 있는 레퍼런스 ROI가 없습니다 (파일명 파싱 실패).')
+            return
+
+        applied = 0
+        max_idx = 0
+        for e in valid_targets:
+            if self._viewer.set_roi(e['idx'], e['x'], e['y'], e['w'], e['h']):
+                applied += 1
+                max_idx = max(max_idx, e['idx'])
+
+        if max_idx:
+            self._bump_roi_count_if_needed(max_idx)
+        self._update_roi_label()
+
+        skipped = len(valid_targets) - applied
+        msg = f'{applied}개 ROI를 불러왔습니다.'
+        if skipped:
+            msg += f'\n({skipped}개는 이미지 범위를 벗어나 제외됨)'
+        QMessageBox.information(self, '완료', msg)
+
     def _on_raw_dim_changed(self):
         try:
             self._raw_w = int(self._edit_raw_w.text())
@@ -443,10 +674,52 @@ class MainWindow(QMainWindow):
         self._viewer.clear_rois()
         self._update_roi_label()
 
+    def _on_roi_selected(self, idx: int, x: int, y: int, w: int, h: int):
+        if idx >= 0:
+            self._spin_edit_idx.setValue(idx)
+            self._spin_edit_x.setValue(x)
+            self._spin_edit_y.setValue(y)
+            self._spin_edit_w.setValue(w)
+            self._spin_edit_h.setValue(h)
+        self._update_roi_label()
+
+    def _bump_roi_count_if_needed(self, idx: int):
+        """Grow the ROI-count spinbox if idx exceeds it. set_roi_count no longer
+        clears existing ROIs, so this is safe to call after adding one."""
+        if idx > self._spin_roi.value():
+            self._spin_roi.setValue(idx)
+
+    def _on_apply_manual_roi(self):
+        if not self._current_path:
+            QMessageBox.warning(self, '경고', '이미지를 먼저 선택하세요.')
+            return
+        idx = self._spin_edit_idx.value()
+        x = self._spin_edit_x.value()
+        y = self._spin_edit_y.value()
+        w = self._spin_edit_w.value()
+        h = self._spin_edit_h.value()
+        if not self._viewer.set_roi(idx, x, y, w, h):
+            QMessageBox.warning(self, '경고', '지정한 좌표가 이미지 범위를 벗어났거나 잘못되었습니다.')
+            return
+        self._bump_roi_count_if_needed(idx)
+        self._viewer.select_roi(idx)
+        self._update_roi_label()
+
+    def _on_delete_roi(self):
+        idx = self._spin_edit_idx.value()
+        if self._viewer.remove_roi(idx):
+            self._update_roi_label()
+        else:
+            QMessageBox.information(self, '알림', f'{idx}번 ROI가 존재하지 않습니다.')
+
     def _update_roi_label(self):
         n = len(self._viewer._roi_items)
         total = self._spin_roi.value()
-        self._lbl_roi.setText(f'ROI: {n} / {total}  (다음: {min(n+1, total)}번 드래그)')
+        next_idx = self._viewer._next_roi_idx
+        next_txt = f'{next_idx}번 드래그' if next_idx <= total else '없음(개수 초과)'
+        sel = self._viewer.get_selected_idx()
+        sel_txt = f'{sel}번 선택됨' if sel is not None else '선택 없음'
+        self._lbl_roi.setText(f'ROI: {n} / {total}   다음: {next_txt}   ({sel_txt})')
 
     def _on_crop(self, all_files: bool):
         rois = self._viewer.get_rois()

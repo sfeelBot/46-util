@@ -55,7 +55,7 @@ Template matching → NMS로 상위 후보 추출 → score 높은 순으로 pix
 
 ### image_cropper
 
-폴더 내 이미지(JPG/PNG/BMP/TIFF/RAW 16-bit)에서 복수 ROI를 GUI로 지정해 크롭 저장하는 PyQt5 도구. 파일명에 XYWH 좌표 포함.
+폴더 내 이미지(JPG/PNG/BMP/TIFF/RAW 16-bit)에서 복수 ROI를 드래그/숫자입력/레퍼런스 이미지 파일명(XYWH) 로드로 지정해 크롭 저장하는 PyQt5 도구. ROI 개별 선택·재지정·삭제 지원. 파일명에 XYWH 좌표 포함.
 자세한 내용은 [utils/image_cropper/processing.md](utils/image_cropper/processing.md) 참고.
 
 ```bash

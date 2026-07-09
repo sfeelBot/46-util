@@ -8,26 +8,39 @@ git 접근이 막힌 사내망 PC에서, GitHub 저장소(`sfeelBot/46-util`)의
 - 기존 `.venv` 폴더는 항상 보존, 반영 후 `requirements.txt`로 `pip install` 자동 실행
 - 필요 시 `.venv`를 완전히 새로 만드는 옵션도 포함
 
+> **GUI로 조작하고 싶다면** [utils/github_sync_gui](../../utils/github_sync_gui/processing.md) 참고.
+> 스케줄 on/off 토글, 수동 동기화, 상태/로그 확인을 창 하나에서 처리하며, 아래 스크립트를 그대로 사용한다.
+
 ## 구성 파일
 
 | 파일 | 역할 |
 | --- | --- |
 | `Sync-FromGitHub.ps1` | 실제 동기화 로직 (커밋 확인 → zip 다운로드 → 반영 → pip install) |
-| `Register-ScheduledTasks.ps1` | 위 스크립트를 08:00/12:00/18:00 매일 실행하도록 작업 스케줄러에 등록 (최초 1회) |
+| `Register-ScheduledTasks.ps1` | 작업 스케줄러 등록/제어 (`-Action Register\|EnableAll\|DisableAll\|Status`) |
+| `config.json` | 실행 시 스크립트와 같은 폴더에 자동 생성됨 (없으면 기본값으로 생성). 설정은 여기서 관리 |
 
 ## 사전 준비 (동기화 대상 PC에서)
 
 1. 이 `tools/github_sync/` 폴더를 대상 PC의 원하는 위치로 복사한다 (예: `C:\Work\46util-sync-scripts`).
-2. `Sync-FromGitHub.ps1` 상단의 설정값을 환경에 맞게 수정한다.
+2. `Sync-FromGitHub.ps1`을 한 번 실행하면 같은 폴더에 `config.json`이 기본값으로 생성된다. 이 파일을 열어 환경에 맞게 수정한다.
 
-   ```powershell
-   $Owner      = "sfeelBot"
-   $Repo       = "46-util"
-   $Branch     = "main"
-   $DestDir    = "C:\Work\46 util"              # 실제 프로젝트가 위치할 경로
-   $StateDir   = "C:\Work\46util-sync-state"    # 마지막 커밋 SHA / 로그 저장 (DestDir 밖에 둘 것)
-   $PythonExe  = "py"                            # py launcher 사용 (py -3.12 ...)
+   ```json
+   {
+     "Owner": "sfeelBot",
+     "Repo": "46-util",
+     "Branch": "main",
+     "DestDir": "C:\\Work\\46 util",
+     "StateDir": "C:\\Work\\46util-sync\\state",
+     "PythonExe": "py",
+     "Token": ""
+   }
    ```
+
+   - `Owner`/`Repo`/`Branch`: 동기화할 GitHub 저장소 (이 스크립트를 다른 저장소용으로 그대로 재사용 가능)
+   - `DestDir`: 실제 프로젝트가 위치할 경로
+   - `StateDir`: 마지막 커밋 SHA / 로그 저장 위치 (**`DestDir` 바깥**에 둘 것)
+   - `PythonExe`: `py` launcher 사용 (`py -3.12 -m venv ...`)
+   - `Token`: **Private 저장소일 때만** GitHub Personal Access Token 입력 (Public이면 빈 문자열로 둘 것). API 조회와 zip 다운로드 양쪽에 `Authorization: token <PAT>` 헤더로 사용됨. 평문 저장이므로 필요한 최소 권한(read-only 등)의 토큰을 권장
 
    > `StateDir`는 반드시 `DestDir` 바깥에 둔다. 동기화 시 `DestDir`는 robocopy `/MIR`로
    > 저장소 내용과 완전히 동일하게 미러링되므로, 안에 두면 상태 파일이 지워진다.
@@ -69,7 +82,17 @@ PC를 켤 때마다 다시 실행할 필요는 없다.
 PC가 꺼져 있었다면 그 실행은 건너뛰되, 다음에 PC를 켜는 즉시 놓친 동기화를 자동으로
 한 번 실행한다.
 
-확인/삭제:
+### 등록 후 켜고 끄기 (삭제하지 않고)
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Register-ScheduledTasks.ps1 -Action DisableAll
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Register-ScheduledTasks.ps1 -Action EnableAll
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Register-ScheduledTasks.ps1 -Action Status
+```
+
+`Status`는 3개 작업의 존재 여부/활성화 여부/마지막 실행 시각·결과를 JSON으로 출력한다 (GUI가 이 값을 파싱해 화면에 표시).
+
+확인/삭제 (schtasks 직접 조회):
 
 ```powershell
 Get-ScheduledTask -TaskName "46util-GitHubSync-*" | Format-Table TaskName,State
@@ -89,8 +112,10 @@ Get-ScheduledTask -TaskName "46util-GitHubSync-*" | Unregister-ScheduledTask -Co
 
 ## 전제 조건 / 주의사항
 
-- Public 저장소 기준으로 작성됨 (인증 토큰 불필요). 저장소가 Private으로 바뀌면
-  `Invoke-RestMethod`/`Invoke-WebRequest`에 `Authorization = "token <PAT>"` 헤더 추가가 필요하다.
+- Public 저장소면 `config.json`의 `Token`을 빈 문자열로 두면 된다 (인증 불필요).
+- Private 저장소면 `config.json`의 `Token`에 GitHub Personal Access Token을 입력해야 한다.
+  API 조회(`Invoke-RestMethod`)와 zip 다운로드(`Invoke-WebRequest`) 양쪽에 자동으로
+  `Authorization: token <PAT>` 헤더가 붙는다.
 - 사내망 프록시 환경이면 시스템 프록시 설정을 따라가는 `Invoke-WebRequest`/`Invoke-RestMethod`
   특성상 브라우저에서 zip 다운로드가 되던 PC라면 대부분 그대로 동작한다.
 - 이 폴더(`tools/github_sync/`)는 리포지토리 자동화용 스크립트이며, `utils/<util_name>/` 처리 관례

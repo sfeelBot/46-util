@@ -3,3 +3,8 @@
 
 __pycache__/
 *.pyc
+
+# PyInstaller 빌드 산출물 (build_exe.ps1로 로컬에서 생성, 커밋 대상 아님)
+utils/github_sync_gui/build/
+utils/github_sync_gui/dist/
+utils/github_sync_gui/*.spec

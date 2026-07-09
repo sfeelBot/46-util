@@ -72,6 +72,23 @@ Template matching → NMS로 상위 후보 추출 → score 높은 순으로 pix
 .venv\Scripts\python.exe utils\signal_noise_analyzer\main.py
 ```
 
+### github_sync_gui
+
+[tools/github_sync](tools/github_sync/README.md)의 zip 기반 GitHub 동기화 기능을 조작하는 PyQt5 GUI.
+자동 동기화 스케줄(08:00/12:00/18:00) 전체 on/off 토글, 지금 바로 동기화, 마지막 동기화 상태·로그 확인,
+프로젝트 경로(DestDir)/상태 경로(StateDir) 설정을 창 하나에서 처리한다.
+자세한 내용은 [utils/github_sync_gui/processing.md](utils/github_sync_gui/processing.md) 참고.
+
+```bash
+.venv\Scripts\python.exe utils\github_sync_gui\main.py
+```
+
+exe로 빌드해서 스케줄 등록용 PowerShell 명령 없이 배포하려면:
+
+```powershell
+utils\github_sync_gui\build_exe.ps1
+```
+
 ## 도구 (tools/)
 
 `utils/`의 image-processing util과 달리, 저장소 자체를 관리하기 위한 자동화 스크립트는 `tools/`에 둔다.
@@ -81,6 +98,7 @@ Template matching → NMS로 상위 후보 추출 → score 높은 순으로 pix
 git 접근이 막힌 사내망 PC에서, GitHub 저장소의 새 push 여부를 08:00/12:00/18:00에 자동으로 확인하고
 변경이 있으면 "Download ZIP"과 동일한 방식(HTTPS zip 다운로드)으로 받아 로컬에 반영하는 PowerShell 스크립트.
 기존 `.venv`는 보존하고, 반영 후 `requirements.txt`로 `pip install`을 자동 실행한다.
+GUI로 스케줄 on/off·상태 확인까지 하고 싶다면 위의 [github_sync_gui](#github_sync_gui) 참고.
 자세한 사용법은 [tools/github_sync/README.md](tools/github_sync/README.md) 참고.
 
 ```powershell

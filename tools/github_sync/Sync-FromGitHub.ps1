@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     사내망 등 git 접근이 막힌 환경에서 GitHub 저장소를 "Download ZIP"과 동일한 방식(HTTPS zip 다운로드)으로
     로컬에 동기화한다. .venv 폴더는 보존하고, 반영 후 requirements.txt로 pip install을 자동 실행한다.
@@ -23,14 +23,38 @@ param(
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# ---- 환경에 맞게 수정 ----
-$Owner      = "sfeelBot"
-$Repo       = "46-util"
-$Branch     = "main"
-$DestDir    = "C:\Work\46 util"              # 실제로 반영될 프로젝트 경로 (필요시 수정)
-$StateDir   = "C:\Work\46util-sync-state"    # SHA 기록/로그 저장 위치 (DestDir 밖! mirror 시 지워지지 않게)
-$PythonExe  = "py"                           # py launcher (py -3.12 -m venv ...)
-# --------------------------
+# ---- 설정: 스크립트와 같은 폴더의 config.json에서 읽는다 (없으면 기본값으로 생성) ----
+$ConfigPath = Join-Path $PSScriptRoot "config.json"
+
+$defaultConfig = [ordered]@{
+    Owner     = "sfeelBot"
+    Repo      = "46-util"
+    Branch    = "main"
+    DestDir   = "C:\Work\46 util"                       # 실제로 반영될 프로젝트 경로
+    StateDir  = (Join-Path $PSScriptRoot "state")        # SHA 기록/로그 저장 위치 (DestDir 밖! mirror 시 지워지지 않게)
+    PythonExe = "py"                                     # py launcher (py -3.12 -m venv ...)
+    Token     = ""                                       # Private 저장소일 때만 GitHub Personal Access Token 입력
+}
+
+$config = [ordered]@{}
+foreach ($key in $defaultConfig.Keys) { $config[$key] = $defaultConfig[$key] }
+
+if (Test-Path $ConfigPath) {
+    $loaded = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+    foreach ($prop in $loaded.PSObject.Properties) { $config[$prop.Name] = $prop.Value }
+}
+else {
+    ($config | ConvertTo-Json) | Set-Content -Path $ConfigPath -Encoding UTF8
+}
+
+$Owner     = $config.Owner
+$Repo      = $config.Repo
+$Branch    = $config.Branch
+$DestDir   = $config.DestDir
+$StateDir  = $config.StateDir
+$PythonExe = $config.PythonExe
+$Token     = $config.Token
+# --------------------------------------------------------------------
 
 $StateFile = Join-Path $StateDir "last_sha.txt"
 $LogFile   = Join-Path $StateDir "sync.log"
@@ -48,6 +72,9 @@ try {
     Write-Log "=== Sync 시작 ==="
 
     $headers = @{ "User-Agent" = "46util-sync-script" }
+    if ($Token) {
+        $headers["Authorization"] = "token $Token"
+    }
     $apiUrl = "https://api.github.com/repos/$Owner/$Repo/commits/$Branch"
     $commit = Invoke-RestMethod -Uri $apiUrl -Headers $headers -UseBasicParsing
     $latestSha = $commit.sha

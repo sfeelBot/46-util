@@ -6,10 +6,10 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QListWidget, QListWidgetItem, QGraphicsView,
     QGraphicsScene, QGraphicsPixmapItem, QSpinBox, QSlider, QComboBox,
     QFileDialog, QMessageBox, QLineEdit, QGroupBox, QFormLayout,
-    QSplitter, QFrame, QProgressDialog, QCheckBox,
+    QSplitter, QFrame, QProgressDialog, QCheckBox, QMenu, QShortcut,
 )
-from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal
-from PyQt5.QtGui import QPen, QColor, QPainter, QIntValidator
+from PyQt5.QtCore import Qt, QRectF, QPointF, QThread, pyqtSignal
+from PyQt5.QtGui import QPen, QColor, QPainter, QIntValidator, QKeySequence
 
 import masking
 
@@ -226,6 +226,70 @@ MODE_LABELS = [
 ]
 
 
+class FolderScanWorker(QThread):
+    """폴더(하위 폴더 포함 가능) 이미지 목록 스캔을 메인 스레드 밖에서 수행한다."""
+
+    scanned = pyqtSignal(list)  # list[Path]
+
+    def __init__(self, folder: Path, recursive: bool, parent=None):
+        super().__init__(parent)
+        self._folder = folder
+        self._recursive = recursive
+
+    def run(self) -> None:
+        try:
+            found = masking.list_images(self._folder, recursive=self._recursive)
+        except Exception:
+            found = []
+        self.scanned.emit(found)
+
+
+class ApplyWorker(QThread):
+    """여러 이미지에 대한 마스킹 적용(로드→처리→저장)을 메인 스레드 밖에서 수행한다."""
+
+    progress = pyqtSignal(int, int)  # done, total
+    finished_ok = pyqtSignal(list, object)  # errors: list[str], out_dir: Path|None
+
+    def __init__(self, targets, current_path, current_arr, mask_y, mode,
+                 gaussian_sigma, fill_value, raw_w, raw_h, parent=None):
+        super().__init__(parent)
+        self._targets = targets
+        self._current_path = current_path
+        self._current_arr = current_arr
+        self._mask_y = mask_y
+        self._mode = mode
+        self._gaussian_sigma = gaussian_sigma
+        self._fill_value = fill_value
+        self._raw_w = raw_w
+        self._raw_h = raw_h
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        errors = []
+        out_dir = None
+        total = len(self._targets)
+        for i, path in enumerate(self._targets):
+            if self._cancel:
+                break
+            try:
+                if path == self._current_path and self._current_arr is not None:
+                    arr = self._current_arr
+                else:
+                    arr = masking.load_array(path, self._raw_w, self._raw_h)
+                masked = masking.apply_mask(
+                    arr, self._mask_y, self._mode,
+                    gaussian_sigma=self._gaussian_sigma, fill_value=self._fill_value,
+                )
+                out_dir = masking.save_masked(path, masked).parent
+            except Exception as e:
+                errors.append(f'{path.name}: {e}')
+            self.progress.emit(i + 1, total)
+        self.finished_ok.emit(errors, out_dir)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -248,6 +312,10 @@ class MainWindow(QMainWindow):
 
         self._syncing = False
 
+        self._scan_worker: FolderScanWorker | None = None
+        self._apply_worker: ApplyWorker | None = None
+        self._progress: QProgressDialog | None = None
+
         self._build_ui()
         self._update_mode_controls()
 
@@ -264,10 +332,10 @@ class MainWindow(QMainWindow):
         toolbar = QHBoxLayout()
         root.addLayout(toolbar)
 
-        btn_folder = QPushButton('📁 폴더 선택')
-        btn_folder.setFixedHeight(32)
-        btn_folder.clicked.connect(self._on_select_folder)
-        toolbar.addWidget(btn_folder)
+        self._btn_folder = QPushButton('📁 폴더 선택')
+        self._btn_folder.setFixedHeight(32)
+        self._btn_folder.clicked.connect(self._on_select_folder)
+        toolbar.addWidget(self._btn_folder)
 
         self._chk_recursive = QCheckBox('하위 폴더 포함')
         toolbar.addWidget(self._chk_recursive)
@@ -310,7 +378,14 @@ class MainWindow(QMainWindow):
         self._file_list = QListWidget()
         self._file_list.setMinimumWidth(220)
         self._file_list.currentRowChanged.connect(self._on_file_selected)
+        self._file_list.itemChanged.connect(self._update_checked_count)
+        self._file_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._file_list.customContextMenuRequested.connect(self._on_list_context_menu)
+        QShortcut(QKeySequence.Copy, self._file_list, activated=self._copy_current_filename)
         list_layout.addWidget(self._file_list, 1)
+
+        self._lbl_checked_count = QLabel('체크됨: 0 / 0개')
+        list_layout.addWidget(self._lbl_checked_count)
 
         chk_row = QHBoxLayout()
         btn_check_all = QPushButton('전체 체크')
@@ -322,13 +397,13 @@ class MainWindow(QMainWindow):
         list_layout.addLayout(chk_row)
 
         del_row = QHBoxLayout()
-        btn_delete_checked = QPushButton('선택 삭제 (체크된 항목)')
-        btn_delete_checked.clicked.connect(self._on_delete_checked)
-        btn_delete_all = QPushButton('전체 삭제')
-        btn_delete_all.setStyleSheet('color:#b00020;')
-        btn_delete_all.clicked.connect(self._on_delete_all)
-        del_row.addWidget(btn_delete_checked)
-        del_row.addWidget(btn_delete_all)
+        self._btn_delete_checked = QPushButton('선택 삭제 (체크된 항목)')
+        self._btn_delete_checked.clicked.connect(self._on_delete_checked)
+        self._btn_delete_all = QPushButton('전체 삭제')
+        self._btn_delete_all.setStyleSheet('color:#b00020;')
+        self._btn_delete_all.clicked.connect(self._on_delete_all)
+        del_row.addWidget(self._btn_delete_checked)
+        del_row.addWidget(self._btn_delete_all)
         list_layout.addLayout(del_row)
 
         splitter.addWidget(list_frame)
@@ -408,19 +483,19 @@ class MainWindow(QMainWindow):
 
         # 처리 버튼
         btn_row = QHBoxLayout()
-        btn_apply_one = QPushButton('현재 이미지 적용')
-        btn_apply_one.setStyleSheet('background:#2a7fcf;color:white;font-weight:bold;')
-        btn_apply_one.clicked.connect(lambda: self._on_apply(scope='current'))
-        btn_apply_all = QPushButton('폴더 전체 적용')
-        btn_apply_all.setStyleSheet('background:#2ca05a;color:white;font-weight:bold;')
-        btn_apply_all.clicked.connect(lambda: self._on_apply(scope='all'))
-        btn_apply_checked = QPushButton('체크된 이미지만 적용')
-        btn_apply_checked.setStyleSheet('background:#c07a1e;color:white;font-weight:bold;')
-        btn_apply_checked.clicked.connect(lambda: self._on_apply(scope='checked'))
+        self._btn_apply_one = QPushButton('현재 이미지 적용')
+        self._btn_apply_one.setStyleSheet('background:#2a7fcf;color:white;font-weight:bold;')
+        self._btn_apply_one.clicked.connect(lambda: self._on_apply(scope='current'))
+        self._btn_apply_all = QPushButton('폴더 전체 적용')
+        self._btn_apply_all.setStyleSheet('background:#2ca05a;color:white;font-weight:bold;')
+        self._btn_apply_all.clicked.connect(lambda: self._on_apply(scope='all'))
+        self._btn_apply_checked = QPushButton('체크된 이미지만 적용')
+        self._btn_apply_checked.setStyleSheet('background:#c07a1e;color:white;font-weight:bold;')
+        self._btn_apply_checked.clicked.connect(lambda: self._on_apply(scope='checked'))
         btn_row.addStretch()
-        btn_row.addWidget(btn_apply_one)
-        btn_row.addWidget(btn_apply_all)
-        btn_row.addWidget(btn_apply_checked)
+        btn_row.addWidget(self._btn_apply_one)
+        btn_row.addWidget(self._btn_apply_all)
+        btn_row.addWidget(self._btn_apply_checked)
         center_layout.addLayout(btn_row)
 
         splitter.addWidget(center_frame)
@@ -430,13 +505,32 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ 폴더/파일 목록
 
+    def _set_busy(self, busy: bool):
+        """스캔/일괄 적용 중에는 목록을 바꾸는 조작을 막아 상태 꼬임을 방지한다."""
+        for w in (self._btn_folder, self._btn_apply_one, self._btn_apply_all,
+                  self._btn_apply_checked, self._btn_delete_checked, self._btn_delete_all):
+            w.setEnabled(not busy)
+
     def _on_select_folder(self):
+        if self._scan_worker is not None:
+            return
         folder = QFileDialog.getExistingDirectory(self, '폴더 선택', str(self._folder or Path.home()))
         if not folder:
             return
         self._folder = Path(folder)
         recursive = self._chk_recursive.isChecked()
-        found = masking.list_images(self._folder, recursive=recursive)
+
+        self._set_busy(True)
+        self._lbl_status.setText('폴더 스캔 중...')
+        worker = FolderScanWorker(self._folder, recursive, self)
+        worker.scanned.connect(self._on_folder_scanned)
+        worker.finished.connect(worker.deleteLater)
+        self._scan_worker = worker
+        worker.start()
+
+    def _on_folder_scanned(self, found: list):
+        self._scan_worker = None
+        self._set_busy(False)
 
         existing = {p.resolve() for p in self._image_paths}
         added = 0
@@ -456,6 +550,7 @@ class MainWindow(QMainWindow):
         self._lbl_status.setText(f'총 {len(self._image_paths)}개 이미지 (이번에 {added}개 추가됨)')
         if self._file_list.currentRow() < 0 and self._image_paths:
             self._file_list.setCurrentRow(0)
+        self._update_checked_count()
 
     def _on_delete_checked(self):
         rows = [i for i in range(self._file_list.count())
@@ -504,6 +599,7 @@ class MainWindow(QMainWindow):
             self._file_list.blockSignals(False)
             self._current_path = self._image_paths[0]
             self._load_current_image()
+        self._update_checked_count()
 
     def _on_search_changed(self, text: str):
         text = text.lower().strip()
@@ -517,6 +613,32 @@ class MainWindow(QMainWindow):
             item = self._file_list.item(i)
             if not item.isHidden():
                 item.setCheckState(state)
+
+    def _update_checked_count(self, *_args):
+        total = self._file_list.count()
+        checked = sum(
+            1 for i in range(total)
+            if self._file_list.item(i).checkState() == Qt.Checked
+        )
+        self._lbl_checked_count.setText(f'체크됨: {checked} / {total}개')
+
+    def _copy_current_filename(self):
+        item = self._file_list.currentItem()
+        if item is not None:
+            QApplication.clipboard().setText(item.text())
+
+    def _on_list_context_menu(self, pos):
+        item = self._file_list.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        act_name = menu.addAction('파일명 복사')
+        act_path = menu.addAction('전체 경로 복사')
+        chosen = menu.exec_(self._file_list.viewport().mapToGlobal(pos))
+        if chosen == act_name:
+            QApplication.clipboard().setText(item.text())
+        elif chosen == act_path:
+            QApplication.clipboard().setText(item.toolTip())
 
     def _on_raw_dim_changed(self):
         try:
@@ -673,6 +795,8 @@ class MainWindow(QMainWindow):
         return result
 
     def _on_apply(self, scope: str):
+        if self._apply_worker is not None:
+            return
         if self._current_path is None or self._current_arr is None:
             QMessageBox.warning(self, '경고', '이미지를 먼저 선택하세요.')
             return
@@ -692,33 +816,35 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, '경고', '체크된 이미지가 없습니다.')
                 return
 
-        progress = QProgressDialog('마스킹 처리 중...', '취소', 0, len(targets), self)
-        progress.setWindowTitle('Y-Axis Masker')
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
+        self._progress = QProgressDialog('마스킹 처리 중...', '취소', 0, len(targets), self)
+        self._progress.setWindowTitle('Y-Axis Masker')
+        self._progress.setWindowModality(Qt.WindowModal)
+        self._progress.setMinimumDuration(0)
+        self._progress.setValue(0)
 
-        done = 0
-        errors = []
-        out_dir = None
-        for path in targets:
-            if progress.wasCanceled():
-                break
-            try:
-                if path == self._current_path:
-                    arr = self._current_arr
-                else:
-                    arr = masking.load_array(path, self._raw_w, self._raw_h)
-                masked = masking.apply_mask(
-                    arr, self._mask_y, mode,
-                    gaussian_sigma=self._gaussian_sigma, fill_value=fill_value,
-                )
-                out_dir = masking.save_masked(path, masked).parent
-            except Exception as e:
-                errors.append(f'{path.name}: {e}')
-            done += 1
-            progress.setValue(done)
+        worker = ApplyWorker(
+            targets, self._current_path, self._current_arr, self._mask_y, mode,
+            self._gaussian_sigma, fill_value, self._raw_w, self._raw_h, self,
+        )
+        worker.progress.connect(self._on_apply_progress)
+        worker.finished_ok.connect(lambda errors, out_dir: self._on_apply_finished(scope, errors, out_dir))
+        worker.finished.connect(worker.deleteLater)
+        self._progress.canceled.connect(worker.cancel)
 
-        progress.close()
+        self._apply_worker = worker
+        self._set_busy(True)
+        worker.start()
+
+    def _on_apply_progress(self, done: int, total: int):
+        if self._progress is not None:
+            self._progress.setValue(done)
+
+    def _on_apply_finished(self, scope: str, errors: list, out_dir):
+        self._apply_worker = None
+        self._set_busy(False)
+        if self._progress is not None:
+            self._progress.close()
+            self._progress = None
 
         scope_label = {'current': '현재 이미지', 'all': '폴더 전체', 'checked': '체크된 이미지'}[scope]
         if errors:

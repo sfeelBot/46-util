@@ -72,6 +72,28 @@ Template matching → NMS로 상위 후보 추출 → score 높은 순으로 pix
 .venv\Scripts\python.exe utils\signal_noise_analyzer\main.py
 ```
 
+### y_axis_masker
+
+지정한 y좌표 아래 영역을 검정/흰색/가우시안 블러/선택 영역 평균값/스포이드 색상 중 하나로 마스킹하는 PyQt5 GUI 도구.
+Before(원본+드래그 가능한 경계선)/After(실시간 미리보기) 줌/패닝 뷰어, y값 숫자입력·슬라이더·드래그 3중 연동, 폴더 전체·체크된 이미지 일괄 적용, 파일명 검색 지원.
+자세한 내용은 [utils/y_axis_masker/processing.md](utils/y_axis_masker/processing.md) 참고.
+
+```bash
+.venv\Scripts\python.exe utils\y_axis_masker\main.py
+```
+
+**사용법**
+
+1. "📁 폴더 선택"으로 이미지 폴더를 열면 좌측에 파일 목록(체크박스 포함)이 나타남 (BMP/PNG/JPG/TIFF/RAW 지원, RAW는 상단 W/H 입력 필요)
+2. y좌표는 숫자 입력, 슬라이더, 또는 Before 뷰어의 빨간 경계선을 클릭+드래그하는 방법 중 아무거나 사용 (셋 다 서로 연동됨)
+3. "마스킹 채우기 방식"에서 검정/흰색/가우시안 블러/선택 영역 평균값/스포이드 중 선택
+   - 가우시안 블러는 강도 슬라이더로 조절
+   - 평균값은 "샘플 영역 지정" 버튼 → Before 뷰어에서 드래그로 영역 지정
+   - 스포이드는 "색상 추출" 버튼 → Before 뷰어에서 픽셀 클릭
+4. After 뷰어에서 결과를 실시간으로 확인
+5. "현재 이미지 적용" / "폴더 전체 적용" / "체크된 이미지만 적용" 중 선택해 실행 → `{원본폴더}/masked/`에 동일 파일명으로 저장
+6. 검색창에 파일명을 입력하면 좌측 목록이 필터링됨 (체크 상태 유지)
+
 ### github_sync_gui
 
 [tools/github_sync](tools/github_sync/README.md)의 zip 기반 GitHub 동기화 기능을 조작하는 PyQt5 GUI.

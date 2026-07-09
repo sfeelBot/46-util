@@ -21,6 +21,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# GUI(QProcess)로 캡처되는 stdout이 UTF-8 바이트로 나가도록 강제 (Sync-FromGitHub.ps1과 동일한 이유).
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $ScriptPath = Join-Path $PSScriptRoot "Sync-FromGitHub.ps1"
 $Times = @("08:00", "12:00", "18:00")

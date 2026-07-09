@@ -1,14 +1,13 @@
 import json
 import os
 import re
-import subprocess
 import shutil
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QProcess, QTimer
+from PyQt5.QtCore import Qt, QObject, QProcess, QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -37,8 +36,6 @@ STABLE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "46util-sy
 CONFIG_PATH = STABLE_DIR / "config.json"
 SYNC_SCRIPT = STABLE_DIR / "Sync-FromGitHub.ps1"
 MANAGE_SCRIPT = STABLE_DIR / "Register-ScheduledTasks.ps1"
-
-CREATE_NO_WINDOW = 0x08000000
 
 
 def resource_dir() -> Path:
@@ -94,15 +91,55 @@ def save_config(cfg: dict) -> None:
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def run_powershell(args: list, timeout: int = 20) -> subprocess.CompletedProcess:
-    cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass"] + args
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        creationflags=CREATE_NO_WINDOW,
-    )
+class PsRunner(QObject):
+    """powershell.exe -File <script> ...를 QProcess로 비동기 실행한다.
+
+    subprocess.run(...)을 GUI 스레드에서 직접 부르면 프로세스가 끝날 때까지 창이 멈춘다.
+    QProcess는 이벤트 루프 안에서 논블로킹으로 동작하고 finished 시그널로 결과를 알려준다.
+    """
+
+    finished = pyqtSignal(int, str, str)  # exit_code, stdout, stderr
+
+    def __init__(self, args: list, parent=None):
+        super().__init__(parent)
+        self._proc = QProcess(self)
+        self._proc.setProgram("powershell.exe")
+        self._proc.setArguments(["-NoProfile", "-ExecutionPolicy", "Bypass"] + args)
+        self._proc.finished.connect(self._on_finished)
+
+    def start(self) -> None:
+        self._proc.start()
+
+    def _on_finished(self, exit_code: int, _exit_status) -> None:
+        stdout = bytes(self._proc.readAllStandardOutput()).decode("utf-8", errors="replace")
+        stderr = bytes(self._proc.readAllStandardError()).decode("utf-8", errors="replace")
+        self.finished.emit(exit_code, stdout, stderr)
+
+
+class CommitCheckWorker(QThread):
+    """GitHub 최신 커밋 조회(urllib, 네트워크 I/O)를 GUI 스레드 밖에서 실행한다."""
+
+    result = pyqtSignal(str)
+
+    def __init__(self, owner: str, repo: str, branch: str, token: str, parent=None):
+        super().__init__(parent)
+        self._owner = owner
+        self._repo = repo
+        self._branch = branch
+        self._token = token
+
+    def run(self) -> None:
+        url = f"https://api.github.com/repos/{self._owner}/{self._repo}/commits/{self._branch}"
+        headers = {"User-Agent": "46util-sync-gui"}
+        if self._token:
+            headers["Authorization"] = f"token {self._token}"
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            self.result.emit(f"GitHub 최신 커밋: {data['sha']}")
+        except (urllib.error.URLError, TimeoutError, KeyError) as exc:
+            self.result.emit(f"GitHub 최신 커밋: 조회 실패 ({exc})")
 
 
 class MainWindow(QMainWindow):
@@ -115,6 +152,9 @@ class MainWindow(QMainWindow):
         self.cfg = load_config()
 
         self.sync_process: QProcess | None = None
+        self._status_runner: PsRunner | None = None
+        self._toggle_runner: PsRunner | None = None
+        self._commit_worker: CommitCheckWorker | None = None
 
         self._build_ui()
         self.refresh_status()
@@ -292,19 +332,22 @@ class MainWindow(QMainWindow):
         self.refresh_status()
 
     def on_toggle_schedule(self, checked: bool) -> None:
+        if self._toggle_runner is not None:
+            return
         self.toggle_btn.setEnabled(False)
-        try:
-            if checked:
-                result = run_powershell(["-File", str(MANAGE_SCRIPT), "-Action", "Register"], timeout=30)
-            else:
-                result = run_powershell(["-File", str(MANAGE_SCRIPT), "-Action", "DisableAll"], timeout=30)
-            if result.returncode != 0:
-                QMessageBox.warning(self, "실패", f"스케줄 변경에 실패했습니다.\n\n{result.stderr}")
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "오류", str(exc))
-        finally:
-            self.toggle_btn.setEnabled(True)
-            self.refresh_status()
+        action = "Register" if checked else "DisableAll"
+        runner = PsRunner(["-File", str(MANAGE_SCRIPT), "-Action", action], self)
+        runner.finished.connect(self._on_toggle_finished)
+        runner.finished.connect(runner.deleteLater)
+        self._toggle_runner = runner
+        runner.start()
+
+    def _on_toggle_finished(self, exit_code: int, _stdout: str, stderr: str) -> None:
+        self._toggle_runner = None
+        if exit_code != 0:
+            QMessageBox.warning(self, "실패", f"스케줄 변경에 실패했습니다.\n\n{stderr}")
+        self.toggle_btn.setEnabled(True)
+        self.refresh_status()
 
     def on_sync_now(self) -> None:
         if self.sync_process is not None:
@@ -355,9 +398,18 @@ class MainWindow(QMainWindow):
         self._refresh_schedule_state()
 
     def _refresh_schedule_state(self) -> None:
+        if self._status_runner is not None:
+            return  # 이전 조회가 아직 진행 중이면 이번 틱은 건너뜀 (중복 프로세스 방지)
+        runner = PsRunner(["-File", str(MANAGE_SCRIPT), "-Action", "Status"], self)
+        runner.finished.connect(self._on_schedule_status_result)
+        runner.finished.connect(runner.deleteLater)
+        self._status_runner = runner
+        runner.start()
+
+    def _on_schedule_status_result(self, _exit_code: int, stdout: str, _stderr: str) -> None:
+        self._status_runner = None
         try:
-            result = run_powershell(["-File", str(MANAGE_SCRIPT), "-Action", "Status"], timeout=15)
-            items = json.loads(result.stdout) if result.stdout.strip() else []
+            items = json.loads(stdout) if stdout.strip() else []
         except Exception:
             items = []
 
@@ -388,21 +440,20 @@ class MainWindow(QMainWindow):
             self.log_view.setPlainText("(아직 로그 없음)")
 
     def check_latest_commit(self) -> None:
-        owner = self.cfg["Owner"]
-        repo = self.cfg["Repo"]
-        branch = self.cfg["Branch"]
-        url = f"https://api.github.com/repos/{owner}/{repo}/commits/{branch}"
-        headers = {"User-Agent": "46util-sync-gui"}
-        token = self.cfg.get("Token")
-        if token:
-            headers["Authorization"] = f"token {token}"
-        req = urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            self.latest_sha_label.setText(f"GitHub 최신 커밋: {data['sha']}")
-        except (urllib.error.URLError, TimeoutError, KeyError) as exc:
-            self.latest_sha_label.setText(f"GitHub 최신 커밋: 조회 실패 ({exc})")
+        if self._commit_worker is not None:
+            return
+        self.latest_sha_label.setText("GitHub 최신 커밋: 확인 중...")
+        worker = CommitCheckWorker(
+            self.cfg["Owner"], self.cfg["Repo"], self.cfg["Branch"], self.cfg.get("Token", ""), self
+        )
+        worker.result.connect(self.latest_sha_label.setText)
+        worker.finished.connect(self._on_commit_worker_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._commit_worker = worker
+        worker.start()
+
+    def _on_commit_worker_finished(self) -> None:
+        self._commit_worker = None
 
 
 def main() -> None:

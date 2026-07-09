@@ -14,7 +14,7 @@ util별 버그/이슈를 모아보는 인덱스 문서. 상세 기록은 해당 
 | image_cropper | [utils/image_cropper/QA.md](utils/image_cropper/QA.md) | 아직 기록된 이슈 없음 (초기 작성 2026-07-06) |
 | signal_noise_analyzer | [utils/signal_noise_analyzer/QA.md](utils/signal_noise_analyzer/QA.md) | 아직 기록된 이슈 없음 (초기 작성 2026-07-06) |
 | y_axis_masker | [utils/y_axis_masker/QA.md](utils/y_axis_masker/QA.md) | 아직 기록된 이슈 없음 (초기 작성 2026-07-09, 검증 진행 중) |
-| github_sync_gui | [utils/github_sync_gui/QA.md](utils/github_sync_gui/QA.md) | PowerShell 스크립트 BOM 인코딩 버그, LastRunTime 특수 날짜 버그 발견 후 수정 완료 (2026-07-09) |
+| github_sync_gui | [utils/github_sync_gui/QA.md](utils/github_sync_gui/QA.md) | robocopy ExitCode=16(공백 경로 인용 오류)·로그 인코딩 깨짐·GUI 블로킹(비동기화)·robocopy `/MIR`의 로컬 파일 삭제 등 수정 완료 (2026-07-09) |
 
 ---
 

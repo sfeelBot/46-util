@@ -14,7 +14,17 @@ zip 기반 GitHub 동기화 기능을 조작하기 위한 PyQt5 데스크탑 GUI
 - **안정 실행 위치**: 최초 실행 시 `%LOCALAPPDATA%\46util-sync\`에 `Sync-FromGitHub.ps1`, `Register-ScheduledTasks.ps1`을 복사해두고, 이후 모든 동작(예약 작업 등록, 수동 동기화)은 이 경로를 기준으로 한다.
   - 이유: Windows 작업 스케줄러에 등록된 작업은 GUI(또는 exe)가 어디 있든, 어디로 이동/삭제되든 상관없이 항상 같은 경로의 스크립트를 실행해야 하므로, GUI 자신의 위치와 무관한 고정 경로가 필요하다.
   - GUI를 새로 실행할 때마다 이 위치의 스크립트를 최신 버전(리포지토리의 `tools/github_sync/*.ps1` 또는 exe에 번들된 사본)으로 덮어써서 항상 최신 로직을 쓰도록 한다.
+- **DestDir 반영 방식**: robocopy `/E`(하위 폴더 포함 복사)를 사용한다. `.venv`는 `/XD`로 제외. **DestDir에만 있고 저장소에는 없는 파일(로컬 전용 파일)은 삭제하지 않는다** — 예전에는 `/MIR`(미러+퍼지)를 써서 이런 파일이 매 동기화마다 자동 삭제되었음 ([QA.md](QA.md) 참고). 트레이드오프: GitHub에서 삭제된 파일은 DestDir에 계속 남아있는다(자동으로 정리되지 않음).
 - **설정 파일**: `%LOCALAPPDATA%\46util-sync\config.json` (`Owner`, `Repo`, `Branch`, `DestDir`, `StateDir`, `PythonExe`, `Token`). `Sync-FromGitHub.ps1`과 GUI가 이 파일을 공유한다.
+
+## 비동기 처리 (GUI 응답성)
+
+GUI가 PowerShell을 호출하는 지점(수동 동기화, 예약 작업 상태 조회, 예약 작업 on/off 토글)과 GitHub API 조회(최신 커밋 확인)는 모두 **메인 스레드를 블로킹하지 않는 방식**으로 실행된다.
+
+- `PsRunner(QObject)`: `QProcess` 기반으로 `powershell.exe -File ...`를 비동기 실행하는 공용 헬퍼. `finished(exit_code, stdout, stderr)` 시그널로 결과를 알려준다. `on_sync_now`(수동 동기화), `_refresh_schedule_state`(상태 조회, 60초 QTimer로 자동 호출), `on_toggle_schedule`(스케줄 on/off)이 모두 이 클래스를 사용한다.
+- `CommitCheckWorker(QThread)`: `check_latest_commit()`의 GitHub API 호출(`urllib.request.urlopen`)을 별도 스레드에서 실행한다.
+- 각 호출 지점은 이미 진행 중인 요청이 있으면 새 요청을 시작하지 않고 건너뛰는 가드(`self._status_runner`/`self._toggle_runner`/`self._commit_worker`가 `None`이 아니면 스킵)를 둔다. 완료 시 `deleteLater()`로 정리해, 60초마다 도는 상태 조회가 장시간 실행 시 QObject를 누적시키지 않도록 한다.
+- 메인 스레드에는 블로킹 `subprocess.run`/`urllib.request.urlopen` 호출이 없다.
 
 ## 기능
 
@@ -36,7 +46,7 @@ zip 기반 GitHub 동기화 기능을 조작하기 위한 PyQt5 데스크탑 GUI
 
 ## 스케줄 제어 구현
 
-`tools/github_sync/Register-ScheduledTasks.ps1 -Action <Register|EnableAll|DisableAll|Status>`를 GUI가 subprocess로 호출한다.
+`tools/github_sync/Register-ScheduledTasks.ps1 -Action <Register|EnableAll|DisableAll|Status>`를 GUI가 `PsRunner`(QProcess, 비동기)로 호출한다.
 
 - `Register`: 3개 예약 작업을 생성/갱신 (기존 스크립트의 기본 동작)
 - `EnableAll` / `DisableAll`: 기존 작업을 삭제하지 않고 Enable/Disable만 전환
@@ -76,3 +86,4 @@ exe 파일 하나만 옮겨서 실행하면 된다.
 ## 버전
 - v1.0 — 2026-07-09 초기 작성
 - v1.1 — 2026-07-09 GUI에서 저장소 URL/브랜치/PAT(Private 지원) 설정 추가
+- v1.2 — 2026-07-09 robocopy ExitCode=16 버그 수정, 로그 한글 인코딩(UTF-8) 수정, GUI 전체 비동기화(QProcess/QThread), robocopy `/MIR`→`/E`로 변경해 로컬 전용 파일 보존 ([QA.md](QA.md) 참고)

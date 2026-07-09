@@ -4,6 +4,46 @@
 
 ---
 
+## 2026-07-09 — robocopy가 ExitCode=16으로 완전히 실패 (수동 동기화 동작 안 함)
+
+- **증상**: 사용자 PC에서 "지금 바로 동기화" 실행 시 로그에 `오류 발생: robocopy 실패 (ExitCode=16)`가 남고 반영이 전혀 되지 않음.
+- **원인**: `Sync-FromGitHub.ps1`이 `Start-Process -FilePath robocopy.exe -ArgumentList <배열>`로 robocopy를 호출했는데, 이 방식은 배열 원소에 공백이 포함된 경로(기본 `DestDir`가 `C:\Work\46 util`처럼 공백 포함)를 자동으로 따옴표 처리해주지 않는다. 그 결과 robocopy가 경로를 엉뚱하게 나눠 받아 "지정된 파일을 찾을 수 없습니다" 오류(ExitCode=16, 경우에 따라 대상 폴더가 생성되지 않은 채 ExitCode=0으로 위장되기도 함)로 실패함. 공백 있는 경로로 직접 재현해 원인 확정.
+- **해결**: `Start-Process -ArgumentList` 대신 네이티브 호출 연산자 `& robocopy.exe $robocopyArgs`로 변경 (배열 원소를 PowerShell이 자동으로 올바르게 인용함) + `$LASTEXITCODE`로 결과 판정. 공백 포함 경로로 재현 테스트 후 정상 동작(파일이 실제로 복사됨, ExitCode 0~7) 확인. 서브에이전트가 독립적으로 `%TEMP%\...with space\...` 경로에 실제 `Sync-FromGitHub.ps1`을 2회(신규+재실행) 실행해 재검증함.
+
+## 2026-07-09 — robocopy `/MIR`가 DestDir의 로컬 전용 파일을 매번 삭제함
+
+- **증상**: 동기화할 때마다 `DestDir`(예: `C:\Work\46 util`)에 로컬로만 추가해둔 파일이 사라짐.
+- **원인**: robocopy `/MIR` 옵션은 미러링 + 퍼지(purge) 동작이라, 원본(GitHub 저장소 zip)에는 없고 대상에만 있는 파일/폴더를 전부 삭제한다. `.venv`는 `/XD`로 예외 처리했지만 그 외 로컬 전용 파일은 보호되지 않았음.
+- **해결**: `/MIR`을 `/E`(하위 폴더 포함 복사, 퍼지 없음)로 변경. 로컬 전용 파일 보존을 실제 robocopy 실행(로컬 전용 파일 생성 → `/E`로 반영 → 파일이 그대로 남아있는지)으로 확인.
+- **트레이드오프(제약사항)**: GitHub 저장소에서 파일이 삭제되어도 이미 로컬에 반영된 사본은 자동으로 지워지지 않는다. 저장소에서 파일을 삭제한 경우 이 PC에서는 수동 정리가 필요할 수 있음.
+
+## 2026-07-09 — sync.log 및 실시간 로그의 한글이 깨져서 표시됨
+
+- **증상**: GUI의 "로그" 패널과 `StateDir\sync.log` 파일에 한글이 `????` 형태로 깨져서 보임 (예: `=== Sync ���� ===`).
+- **원인**: 두 가지가 겹친 문제.
+  1. `Write-Log` 함수가 `Add-Content -Path $LogFile -Value $line`로 파일에 쓸 때 인코딩을 지정하지 않아, Windows 기본 코드페이지(한글 Windows에서는 CP949)로 저장됨. 반면 GUI(`main.py`)는 이 로그 파일을 `read_text(encoding="utf-8")`로 읽어서 불일치 발생.
+  2. PowerShell의 `Write-Host` 출력도 stdout이 리다이렉트(파이프/캡처)되면 콘솔 코드페이지(CP949)로 나가는데, GUI가 `QProcess`로 캡처한 뒤 `decode("utf-8")`로 디코드하고 있어서 "지금 바로 동기화"의 실시간 로그도 동일하게 깨짐.
+  - 직접 바이트 단위로 재현: `Add-Content`로 쓴 파일을 읽어보면 UTF-8이 아닌 CP949 바이트였음.
+- **해결**:
+  - `Sync-FromGitHub.ps1`, `Register-ScheduledTasks.ps1` 상단에 `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` 추가 → 리다이렉트된 stdout이 UTF-8 바이트로 나가도록 강제.
+  - `Write-Log`를 `[System.IO.File]::AppendAllText($LogFile, $line + "` `r` `n", (New-Object System.Text.UTF8Encoding($false)))`로 변경 → BOM 없는 UTF-8로 파일에 직접 기록.
+  - sync.log 파일 재검증(UTF-8로 정상 디코드) + `QProcess`로 실제 캡처한 실시간 로그 재검증, 둘 다 정상 확인.
+- **주의**: 이 두 `.ps1` 스크립트 파일 자체는 반드시 UTF-8 **with BOM**으로 저장되어 있어야 한다 (스크립트 소스 코드 안의 한글 리터럴이 파싱되는 방식과 관련된, 위와는 별개의 기존 이슈 — 아래 "PowerShell 스크립트 한글 인코딩 깨짐" 항목 참고). 앞으로 이 파일을 수정할 때 BOM 없이 재저장하면 `OutputEncoding` 수정과 무관하게 다시 깨질 수 있다.
+
+## 2026-07-09 — GUI가 60초마다/토글할 때마다 잠깐씩 멈춤 (동기 서브프로세스 호출)
+
+- **증상**: 예약 작업 상태를 자동 새로고침하는 60초 주기 타이머, "자동 동기화" 토글, "GitHub 최신 커밋 확인" 버튼 클릭 시 GUI 전체가 순간적으로 멈춤(끊김).
+- **원인**: `_refresh_schedule_state()`와 `on_toggle_schedule()`이 `subprocess.run(...)`으로 `powershell.exe`를 GUI 메인 스레드에서 동기적으로 실행했고, `check_latest_commit()`도 `urllib.request.urlopen(...)`을 메인 스레드에서 동기 호출했음. 이 중 `_refresh_schedule_state()`는 60초 QTimer로 자동 반복 호출되어 주기적으로 멈춤 현상이 발생.
+- **해결**: `PsRunner(QObject)`(QProcess 기반 비동기 실행)와 `CommitCheckWorker(QThread)`를 새로 만들어 세 지점 모두 논블로킹으로 전환. 중복 호출 방지 가드(`_status_runner`/`_toggle_runner`/`_commit_worker`)와 완료 후 `deleteLater()` 정리 포함. `main.py`에 더 이상 블로킹 `subprocess.run`/`urllib.request.urlopen` 호출이 메인 스레드에 없음을 정적 확인 + `QT_QPA_PLATFORM=offscreen`으로 실제 `MainWindow`를 띄워 각 호출이 즉시 반환되고(비블로킹 증명), 이벤트 루프를 몇 차례 돌리면 실제로 완료되어 상태가 갱신되는 것을 확인. 자세한 내용은 [processing.md](processing.md)의 "비동기 처리" 절 참고.
+
+## 검증 요약 (2026-07-09, robocopy/인코딩/비동기 수정 4건)
+
+서브에이전트가 독립적으로 검증 (코드는 건드리지 않고 실행/테스트만 수행):
+- robocopy ExitCode=16: 공백 포함 경로로 `Sync-FromGitHub.ps1`을 2회(신규+`-Force` 재실행) 실제 실행 → 둘 다 성공 범위 ExitCode(1, 2), 파일이 실제로 복사됨을 확인.
+- 로그 인코딩: 생성된 `sync.log`를 UTF-8로 읽어 한글이 정상 표시됨을 확인. `QProcess`로 캡처한 실시간 로그도 동일하게 정상 확인. (`Register-ScheduledTasks.ps1`의 `Register`/`EnableAll`/`DisableAll` 분기 안의 한글 메시지는 실제 예약 작업을 건드리게 되어 안전상 직접 실행 검증하지 않음 — 정적 확인 및 동일 수정 패턴 적용 확인으로 대체.)
+- GUI 비동기화: `QT_QPA_PLATFORM=offscreen`으로 실제 `MainWindow` 기동, `_refresh_schedule_state`/`check_latest_commit`/`on_toggle_schedule` 호출이 즉시 반환(비블로킹)되고 이벤트 루프 진행 후 정상 완료되는 것을 확인. `on_toggle_schedule`은 실제 예약 작업을 건드리지 않도록 `MANAGE_SCRIPT`를 더미 스크립트로 임시 치환해 검증. 테스트 전후로 이 PC에 `46util-GitHubSync-*` 예약 작업이 등록되지 않은 상태임을 확인(부작용 없음).
+- `/MIR` → `/E` (로컬 전용 파일 보존): 로컬 전용 파일을 만들어두고 robocopy 반영 후에도 그대로 남아있는지 직접 실행 확인 (이 항목은 서브에이전트 검증 이후 사용자 요청으로 추가된 수정이라 별도로 직접 실행 검증함, 서브에이전트 재검증은 하지 않음).
+
 ## 2026-07-09 — PowerShell 스크립트 한글 인코딩 깨짐
 
 - **증상**: `tools/github_sync/Sync-FromGitHub.ps1`, `Register-ScheduledTasks.ps1` 실행 시 로그의 한글 일부가 깨져서 출력됨 (예: "시작" → "?쒖옉").

@@ -8,7 +8,9 @@ import urllib.request
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QObject, QProcess, QThread, QTimer, pyqtSignal
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
+    QAction,
     QApplication,
     QFileDialog,
     QGroupBox,
@@ -17,9 +19,11 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -42,6 +46,16 @@ def resource_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys._MEIPASS) / "resources"  # type: ignore[attr-defined]
     return Path(__file__).resolve().parents[2] / "tools" / "github_sync"
+
+
+def asset_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "resources"  # type: ignore[attr-defined]
+    return Path(__file__).resolve().parent / "assets"
+
+
+ICON_ON = asset_dir() / "icon_on.ico"
+ICON_OFF = asset_dir() / "icon_off.ico"
 
 
 def ensure_stable_scripts() -> None:
@@ -157,11 +171,86 @@ class MainWindow(QMainWindow):
         self._commit_worker: CommitCheckWorker | None = None
 
         self._build_ui()
+        self._build_tray_icon()
         self.refresh_status()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_status)
         self.timer.start(60_000)
+
+    # ---------------------------------------------------------------- 트레이 아이콘
+    def _build_tray_icon(self) -> None:
+        self.setWindowIcon(QIcon(str(ICON_OFF)))
+
+        self.tray_action_toggle: QAction | None = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray_icon = None
+            return
+
+        self.tray_icon = QSystemTrayIcon(QIcon(str(ICON_OFF)), self)
+        self.tray_icon.setToolTip("46 util - GitHub 동기화\n자동 동기화: 확인 중...")
+        self.tray_icon.activated.connect(self._on_tray_activated)
+
+        menu = QMenu()
+        self.tray_action_toggle = QAction("자동 동기화: 확인 중...", self, checkable=True)
+        self.tray_action_toggle.triggered.connect(self.on_toggle_schedule)
+        menu.addAction(self.tray_action_toggle)
+
+        action_sync = QAction("지금 동기화", self)
+        action_sync.triggered.connect(self.on_sync_now)
+        menu.addAction(action_sync)
+
+        menu.addSeparator()
+        action_open = QAction("창 열기", self)
+        action_open.triggered.connect(self._show_and_raise)
+        menu.addAction(action_open)
+
+        action_quit = QAction("종료", self)
+        action_quit.triggered.connect(self._quit_app)
+        menu.addAction(action_quit)
+
+        self.tray_icon.setContextMenu(menu)
+        self.tray_icon.show()
+
+    def _on_tray_activated(self, reason) -> None:
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self._show_and_raise()
+
+    def _show_and_raise(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_app(self) -> None:
+        if self.tray_icon is not None:
+            self.tray_icon.hide()
+        QApplication.instance().quit()
+
+    def _update_tray_status(self, all_on: bool) -> None:
+        icon = QIcon(str(ICON_ON if all_on else ICON_OFF))
+        status_text = "ON" if all_on else "OFF"
+        self.setWindowIcon(icon)
+        if self.tray_icon is not None:
+            self.tray_icon.setIcon(icon)
+            self.tray_icon.setToolTip(f"46 util - GitHub 동기화\n자동 동기화: {status_text}")
+        if self.tray_action_toggle is not None:
+            self.tray_action_toggle.blockSignals(True)
+            self.tray_action_toggle.setChecked(all_on)
+            self.tray_action_toggle.setText(f"자동 동기화: {status_text}")
+            self.tray_action_toggle.blockSignals(False)
+
+    def closeEvent(self, event) -> None:
+        if self.tray_icon is None:
+            super().closeEvent(event)
+            return
+        event.ignore()
+        self.hide()
+        self.tray_icon.showMessage(
+            "46 util - GitHub 동기화",
+            "트레이에서 계속 실행됩니다. 완전히 종료하려면 트레이 아이콘에서 '종료'를 선택하세요.",
+            QSystemTrayIcon.Information,
+            3000,
+        )
 
     # ---------------------------------------------------------------- UI 구성
     def _build_ui(self) -> None:
@@ -420,6 +509,7 @@ class MainWindow(QMainWindow):
         self.toggle_btn.setChecked(all_on)
         self.toggle_btn.setText(f"자동 동기화: {'ON' if all_on else 'OFF'}")
         self.toggle_btn.blockSignals(False)
+        self._update_tray_status(all_on)
 
         for row, name in enumerate(TASK_NAMES):
             item = by_name.get(name, {})
@@ -458,6 +548,7 @@ class MainWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)  # 창을 닫아도 트레이에서 계속 실행됨
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())

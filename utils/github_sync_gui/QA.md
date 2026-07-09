@@ -36,6 +36,14 @@
 - **원인**: `_refresh_schedule_state()`와 `on_toggle_schedule()`이 `subprocess.run(...)`으로 `powershell.exe`를 GUI 메인 스레드에서 동기적으로 실행했고, `check_latest_commit()`도 `urllib.request.urlopen(...)`을 메인 스레드에서 동기 호출했음. 이 중 `_refresh_schedule_state()`는 60초 QTimer로 자동 반복 호출되어 주기적으로 멈춤 현상이 발생.
 - **해결**: `PsRunner(QObject)`(QProcess 기반 비동기 실행)와 `CommitCheckWorker(QThread)`를 새로 만들어 세 지점 모두 논블로킹으로 전환. 중복 호출 방지 가드(`_status_runner`/`_toggle_runner`/`_commit_worker`)와 완료 후 `deleteLater()` 정리 포함. `main.py`에 더 이상 블로킹 `subprocess.run`/`urllib.request.urlopen` 호출이 메인 스레드에 없음을 정적 확인 + `QT_QPA_PLATFORM=offscreen`으로 실제 `MainWindow`를 띄워 각 호출이 즉시 반환되고(비블로킹 증명), 이벤트 루프를 몇 차례 돌리면 실제로 완료되어 상태가 갱신되는 것을 확인. 자세한 내용은 [processing.md](processing.md)의 "비동기 처리" 절 참고.
 
+## 검증 요약 (2026-07-09, 로고 아이콘 + 시스템 트레이 상주 기능 추가)
+
+서브에이전트가 독립적으로 검증 (코드는 건드리지 않고 실행/테스트만 수행). 발견된 버그 없음.
+- `assets/icon_on.ico`(초록)/`icon_off.ico`(회색): 유효한 다중 해상도 ICO, 색상이 명확히 다름을 확인.
+- `main.py`: 이 검증 환경은 `QSystemTrayIcon.isSystemTrayAvailable()`이 `False`라 실제 트레이 렌더링/클릭은 검증 불가 — 대신 `isSystemTrayAvailable`을 강제로 `True`로 만든 인스턴스로 트레이 생성/메뉴 4개 액션(자동 동기화 토글/지금 동기화/창 열기/종료) 연결/`closeEvent`의 hide-not-close 동작/`_update_tray_status`의 아이콘·툴팁·체크상태 동기화를 실제로 트리거해 검증. 트레이 없는 폴백 분기(정상 종료)도 별도 확인.
+- `build_exe.ps1`: 실제로 빌드 실행해 exe 생성 확인, exe 바이너리에 두 아이콘·두 ps1 스크립트가 번들됨을 확인, exe의 PE 아이콘 리소스가 `icon_on.ico`와 픽셀 단위로 일치함을 확인, exe 정상 기동 확인 후 프로세스 정리.
+- 이 PC에 실제 예약 작업은 등록되지 않았음 (검증 전/후 확인). `dist/`, `build/`는 `.gitignore`에 이미 포함되어 있어 git에는 영향 없음.
+
 ## 검증 요약 (2026-07-09, robocopy/인코딩/비동기 수정 4건)
 
 서브에이전트가 독립적으로 검증 (코드는 건드리지 않고 실행/테스트만 수행):

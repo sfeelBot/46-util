@@ -4,6 +4,7 @@
 사내망 등 git 접근이 막힌 PC에서 [tools/github_sync](../../tools/github_sync/README.md)의
 zip 기반 GitHub 동기화 기능을 조작하기 위한 PyQt5 데스크탑 GUI.
 자동 동기화 스케줄(매일 08:00/12:00/18:00) on/off, 수동 동기화, 상태 확인, 로그 확인, 경로 설정을 하나의 창에서 처리한다.
+시스템 트레이(작업표시줄 알림영역)에 상시 아이콘을 띄워, 창을 닫아도 백그라운드에서 계속 동작하며 자동 동기화 ON/OFF 상태를 아이콘 색상으로 바로 확인할 수 있다.
 
 ---
 
@@ -36,6 +37,7 @@ GUI가 PowerShell을 호출하는 지점(수동 동기화, 예약 작업 상태 
 | 수동 동기화 | "지금 바로 동기화" 버튼으로 `Sync-FromGitHub.ps1 -Force`를 비동기 실행, 실시간 로그 출력 |
 | 상태 | 로컬에 반영된 커밋 SHA, 마지막 동기화 시각, "새로고침" 클릭 시 GitHub API로 최신 커밋 조회 (Private이면 Token 사용) |
 | 로그 | `StateDir\sync.log` 최근 200줄 표시 |
+| 트레이 아이콘 | 창을 닫아도 시스템 트레이에 상주. 아이콘 색상(초록=ON/회색=OFF)과 툴팁으로 자동 동기화 상태 확인, 우클릭 메뉴로 토글/수동 동기화/창 열기/종료 |
 
 ## Private 저장소 지원
 
@@ -52,6 +54,14 @@ GUI가 PowerShell을 호출하는 지점(수동 동기화, 예약 작업 상태 
 - `EnableAll` / `DisableAll`: 기존 작업을 삭제하지 않고 Enable/Disable만 전환
 - `Status`: 3개 작업의 존재 여부/활성화 여부/마지막 실행 시각·결과를 JSON으로 반환 (GUI가 파싱)
 
+## 트레이 아이콘 / 백그라운드 상주
+
+- `assets/icon_on.ico`(초록)·`assets/icon_off.ico`(회색)는 `assets/generate_icons.py`(Pillow)로 생성한 순환 화살표 로고. 색상/모양을 바꾸려면 이 스크립트를 수정 후 재실행.
+- 창의 X 버튼(닫기)을 누르면 `closeEvent`에서 실제 종료 대신 `hide()`만 하고 트레이 풍선 알림을 띄운다 (`QApplication.setQuitOnLastWindowClosed(False)`로 마지막 창이 닫혀도 앱이 종료되지 않도록 함). 완전히 종료하려면 트레이 아이콘 우클릭 메뉴의 "종료"를 사용해야 한다.
+- 트레이 아이콘 좌클릭/더블클릭: 창 열기(복원). 우클릭 메뉴: "자동 동기화"(체크 가능, 클릭 즉시 on/off 토글 — 창의 토글 버튼과 동일한 `on_toggle_schedule`을 공유), "지금 동기화", "창 열기", "종료".
+- 예약 작업 상태 조회(`_on_schedule_status_result`) 결과에 따라 `_update_tray_status()`가 창 아이콘·트레이 아이콘·트레이 툴팁·트레이 메뉴의 체크 상태를 한 번에 갱신한다 (창의 토글 버튼과 트레이 메뉴 항목은 항상 같은 상태를 보여줌).
+- `QSystemTrayIcon.isSystemTrayAvailable()`이 `False`인 환경(트레이가 없는 특수 환경)에서는 트레이 관련 기능을 건너뛰고 X 버튼이 정상적으로 창을 닫도록 폴백한다.
+
 ## 사용법
 
 ```
@@ -64,6 +74,7 @@ GUI가 PowerShell을 호출하는 지점(수동 동기화, 예약 작업 상태 
    - 기존에 수동으로 다운받아 쓰던 폴더가 있다면 그 경로를 그대로 지정하면 `.venv`를 보존한 채 이어서 사용 가능.
 4. "자동 동기화: OFF" 버튼을 눌러 ON으로 전환하면 08:00/12:00/18:00 예약 작업이 등록된다.
 5. 당장 반영하고 싶으면 "지금 바로 동기화" 버튼을 사용한다.
+6. 창을 닫아도(X 버튼) 프로그램은 트레이(작업표시줄 알림영역)에서 계속 실행된다. 트레이 아이콘을 클릭하면 창이 다시 열리고, 우클릭하면 자동 동기화 토글/수동 동기화/종료 메뉴가 나온다. 완전히 끄려면 트레이 메뉴의 "종료"를 사용한다.
 
 ## exe 빌드 (PyInstaller)
 
@@ -71,12 +82,13 @@ GUI가 PowerShell을 호출하는 지점(수동 동기화, 예약 작업 상태 
 utils\github_sync_gui\build_exe.ps1
 ```
 
-`tools/github_sync/*.ps1`을 리소스로 번들하여 단일 실행파일(`dist\46util-sync-gui.exe`)을 생성한다.
-exe로 배포해도 실행 시 스크립트를 `%LOCALAPPDATA%\46util-sync\`에 풀어놓고 동작하므로, 별도 설치 과정 없이
+`tools/github_sync/*.ps1`과 `assets/*.ico`를 리소스로 번들하여 단일 실행파일(`dist\46util-sync-gui.exe`)을 생성한다.
+exe 자체의 아이콘도 `assets/icon_on.ico`로 지정된다.
+exe로 배포해도 실행 시 스크립트/아이콘을 `%LOCALAPPDATA%\46util-sync\`에 풀어놓고 동작하므로, 별도 설치 과정 없이
 exe 파일 하나만 옮겨서 실행하면 된다.
 
 ## 의존성
-`PyQt5` (실행), `pyinstaller` (exe 빌드 시에만 필요)
+`PyQt5` (실행), `pyinstaller` (exe 빌드 시에만 필요), `Pillow` (아이콘 재생성 스크립트 `assets/generate_icons.py` 실행 시에만 필요 — 이미 저장소 공용 requirements.txt에 포함됨)
 
 ## 제약사항
 - Windows 전용 (작업 스케줄러/robocopy 의존).
@@ -87,3 +99,4 @@ exe 파일 하나만 옮겨서 실행하면 된다.
 - v1.0 — 2026-07-09 초기 작성
 - v1.1 — 2026-07-09 GUI에서 저장소 URL/브랜치/PAT(Private 지원) 설정 추가
 - v1.2 — 2026-07-09 robocopy ExitCode=16 버그 수정, 로그 한글 인코딩(UTF-8) 수정, GUI 전체 비동기화(QProcess/QThread), robocopy `/MIR`→`/E`로 변경해 로컬 전용 파일 보존 ([QA.md](QA.md) 참고)
+- v1.3 — 2026-07-09 로고 아이콘 추가, 시스템 트레이 상주 기능(창 닫아도 백그라운드 실행, 트레이 아이콘 색상으로 ON/OFF 확인, 우클릭 메뉴로 토글) 추가

@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QListWidget, QListWidgetItem, QGraphicsView,
     QGraphicsScene, QGraphicsPixmapItem, QSpinBox, QSlider, QComboBox,
     QFileDialog, QMessageBox, QLineEdit, QGroupBox, QFormLayout,
-    QSplitter, QFrame, QProgressDialog,
+    QSplitter, QFrame, QProgressDialog, QCheckBox,
 )
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt5.QtGui import QPen, QColor, QPainter, QIntValidator
@@ -50,6 +50,10 @@ class ZoomPanView(QGraphicsView):
             return 0, 0
         pm = self._pixmap_item.pixmap()
         return pm.width(), pm.height()
+
+    def clear(self):
+        self._scene.clear()
+        self._pixmap_item = None
 
     def wheelEvent(self, event):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
@@ -103,6 +107,14 @@ class BeforeViewer(ZoomPanView):
     def set_mode(self, mode: str):
         self._mode = mode
         self.setCursor(Qt.CrossCursor if mode != 'line' else Qt.ArrowCursor)
+
+    def clear(self):
+        super().clear()
+        self._line_item = None
+        self._sample_rect_item = None
+        self._temp_roi_item = None
+        self._dragging_line = False
+        self._roi_drawing = False
 
     def load_pixmap(self, pixmap, fit=True):
         super().load_pixmap(pixmap, fit=fit)
@@ -257,6 +269,9 @@ class MainWindow(QMainWindow):
         btn_folder.clicked.connect(self._on_select_folder)
         toolbar.addWidget(btn_folder)
 
+        self._chk_recursive = QCheckBox('하위 폴더 포함')
+        toolbar.addWidget(self._chk_recursive)
+
         raw_group = QGroupBox('RAW 설정')
         raw_form = QFormLayout(raw_group)
         raw_form.setContentsMargins(6, 4, 6, 4)
@@ -305,6 +320,16 @@ class MainWindow(QMainWindow):
         chk_row.addWidget(btn_check_all)
         chk_row.addWidget(btn_uncheck_all)
         list_layout.addLayout(chk_row)
+
+        del_row = QHBoxLayout()
+        btn_delete_checked = QPushButton('선택 삭제 (체크된 항목)')
+        btn_delete_checked.clicked.connect(self._on_delete_checked)
+        btn_delete_all = QPushButton('전체 삭제')
+        btn_delete_all.setStyleSheet('color:#b00020;')
+        btn_delete_all.clicked.connect(self._on_delete_all)
+        del_row.addWidget(btn_delete_checked)
+        del_row.addWidget(btn_delete_all)
+        list_layout.addLayout(del_row)
 
         splitter.addWidget(list_frame)
 
@@ -410,16 +435,75 @@ class MainWindow(QMainWindow):
         if not folder:
             return
         self._folder = Path(folder)
-        self._image_paths = masking.list_images(self._folder)
-        self._file_list.clear()
-        for p in self._image_paths:
+        recursive = self._chk_recursive.isChecked()
+        found = masking.list_images(self._folder, recursive=recursive)
+
+        existing = {p.resolve() for p in self._image_paths}
+        added = 0
+        for p in found:
+            resolved = p.resolve()
+            if resolved in existing:
+                continue
+            existing.add(resolved)
+            self._image_paths.append(p)
             item = QListWidgetItem(p.name)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Unchecked)
+            item.setToolTip(str(p))
             self._file_list.addItem(item)
-        self._lbl_status.setText(f'{len(self._image_paths)}개 이미지 로드됨')
-        if self._image_paths:
+            added += 1
+
+        self._lbl_status.setText(f'총 {len(self._image_paths)}개 이미지 (이번에 {added}개 추가됨)')
+        if self._file_list.currentRow() < 0 and self._image_paths:
             self._file_list.setCurrentRow(0)
+
+    def _on_delete_checked(self):
+        rows = [i for i in range(self._file_list.count())
+                if self._file_list.item(i).checkState() == Qt.Checked]
+        if not rows:
+            QMessageBox.information(self, '알림', '체크된 이미지가 없습니다.')
+            return
+        self._remove_rows(rows)
+
+    def _on_delete_all(self):
+        if not self._image_paths:
+            return
+        reply = QMessageBox.question(
+            self, '전체 삭제',
+            f'리스트의 이미지 {len(self._image_paths)}개를 목록에서 모두 제거할까요?\n'
+            '(원본 파일은 삭제되지 않습니다)',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._remove_rows(list(range(self._file_list.count())))
+
+    def _remove_rows(self, rows: list):
+        """리스트/메모리에서만 제거. 원본 파일은 건드리지 않는다."""
+        removed_current = False
+        for row in sorted(set(rows), reverse=True):
+            path = self._image_paths[row]
+            if self._current_path is not None and path == self._current_path:
+                removed_current = True
+            del self._image_paths[row]
+            self._file_list.takeItem(row)
+
+        if removed_current or not self._image_paths:
+            self._current_path = None
+            self._current_arr = None
+            self._before_viewer.clear()
+            self._after_viewer.clear()
+
+        self._lbl_status.setText(f'총 {len(self._image_paths)}개 이미지')
+        if self._image_paths and self._current_path is None:
+            # takeItem() 이후 currentRow가 이미 0으로 맞춰져 있으면 setCurrentRow(0)이
+            # currentRowChanged를 emit하지 않아 새 이미지가 로드되지 않을 수 있음.
+            # 시그널에 의존하지 않고 직접 로드해 확실하게 갱신한다.
+            self._file_list.blockSignals(True)
+            self._file_list.setCurrentRow(0)
+            self._file_list.blockSignals(False)
+            self._current_path = self._image_paths[0]
+            self._load_current_image()
 
     def _on_search_changed(self, text: str):
         text = text.lower().strip()

@@ -13,7 +13,7 @@
 | raw_flipper | 폴더 내 이미지 파일(RAW/PNG/BMP 등)을 재귀 탐색하여 일괄 상하반전 후 동일한 폴더 구조로 결과 폴더에 저장하는 PyQt5 GUI 도구 | [utils/raw_flipper/processing.md](utils/raw_flipper/processing.md) |
 | image_cropper | 폴더 내 이미지(JPG/PNG/BMP/TIFF/RAW 16-bit)에서 복수 ROI를 드래그/숫자입력/레퍼런스 이미지 파일명(XYWH) 로드로 지정해 크롭 저장하는 PyQt5 도구. ROI 개별 선택·재지정·삭제 지원 | [utils/image_cropper/processing.md](utils/image_cropper/processing.md) |
 | signal_noise_analyzer | 이미지 ROI를 이진화(threshold)하여 Signal / Noise1(σ_bg) / Noise2(bg_mean−bg_min)를 실시간 측정·저장하는 PyQt5 GUI 도구. 라인 프로파일, 폴더 탭, 결과 트리 제공 | [utils/signal_noise_analyzer/processing.md](utils/signal_noise_analyzer/processing.md) |
-| y_axis_masker | 지정한 y좌표 아래 영역을 검정/흰색/가우시안 블러/선택영역 평균값/스포이드 색상으로 마스킹하는 PyQt5 GUI 도구. Before/After 줌 뷰어, 폴더 일괄·체크 적용, 파일명 검색 지원 | [utils/y_axis_masker/processing.md](utils/y_axis_masker/processing.md) |
+| y_axis_masker | 지정한 y좌표 아래 영역을 검정/흰색/가우시안 블러/선택영역 평균값/스포이드 색상으로 마스킹하는 PyQt5 GUI 도구. Before/After 줌 뷰어, 하위 폴더 포함 스캔·다중 폴더 누적, 폴더 일괄·체크 적용, 목록 삭제(원본 보존), 파일명 검색 지원 | [utils/y_axis_masker/processing.md](utils/y_axis_masker/processing.md) |
 | github_sync_gui | 사내망 PC에서 GitHub 저장소를 zip 다운로드 방식으로 동기화하는 [tools/github_sync](tools/github_sync/README.md) 스크립트를 제어하는 PyQt5 GUI. 자동 동기화 스케줄(08/12/18시) on/off, 수동 동기화, 상태/로그 확인, 경로 설정 제공. 시스템 트레이 상주(로고 아이콘 색상으로 ON/OFF 확인) | [utils/github_sync_gui/processing.md](utils/github_sync_gui/processing.md) |
 
 ---

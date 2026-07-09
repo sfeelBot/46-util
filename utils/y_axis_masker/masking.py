@@ -11,10 +11,14 @@ from PyQt5.QtGui import QImage, QPixmap
 SUPPORTED_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.raw'}
 
 
-def list_images(folder: Path) -> list:
-    """폴더 내 지원 포맷 이미지 경로를 이름순으로 반환."""
+def list_images(folder: Path, recursive: bool = False) -> list:
+    """폴더 내 지원 포맷 이미지 경로를 이름순으로 반환.
+
+    recursive=True면 하위 폴더까지 재귀적으로 탐색한다.
+    """
+    it = folder.rglob('*') if recursive else folder.iterdir()
     return sorted(
-        p for p in folder.iterdir()
+        p for p in it
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS
     )
 

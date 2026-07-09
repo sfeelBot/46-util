@@ -5,6 +5,7 @@ import shutil
 import sys
 import urllib.error
 import urllib.request
+import winreg
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QObject, QProcess, QThread, QTimer, pyqtSignal
@@ -105,6 +106,39 @@ def save_config(cfg: dict) -> None:
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# ---------------------------------------------------------------- Windows 시작 프로그램 등록
+STARTUP_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+STARTUP_VALUE_NAME = "46util-sync-gui"
+
+
+def _startup_command() -> str:
+    """레지스트리 Run 키에 넣을 실행 커맨드. exe로 빌드된 경우 exe 경로,
+    개발 모드(스크립트 실행)에서는 venv python으로 이 스크립트를 실행하도록 등록한다."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    return f'"{sys.executable}" "{Path(__file__).resolve()}"'
+
+
+def is_startup_registered() -> bool:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_RUN_KEY, 0, winreg.KEY_READ) as key:
+            winreg.QueryValueEx(key, STARTUP_VALUE_NAME)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def set_startup_registered(enabled: bool) -> None:
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, STARTUP_RUN_KEY, 0, winreg.KEY_WRITE) as key:
+        if enabled:
+            winreg.SetValueEx(key, STARTUP_VALUE_NAME, 0, winreg.REG_SZ, _startup_command())
+        else:
+            try:
+                winreg.DeleteValue(key, STARTUP_VALUE_NAME)
+            except FileNotFoundError:
+                pass
+
+
 class PsRunner(QObject):
     """powershell.exe -File <script> ...를 QProcess로 비동기 실행한다.
 
@@ -173,6 +207,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_tray_icon()
         self.refresh_status()
+        self._refresh_startup_state()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_status)
@@ -259,6 +294,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._build_repo_group())
         layout.addWidget(self._build_path_group())
+        layout.addWidget(self._build_startup_group())
         layout.addWidget(self._build_schedule_group())
         layout.addWidget(self._build_manual_group())
         layout.addWidget(self._build_status_group())
@@ -326,6 +362,18 @@ class MainWindow(QMainWindow):
 
         return box
 
+    def _build_startup_group(self) -> QGroupBox:
+        box = QGroupBox("Windows 시작 시 자동 실행")
+        vbox = QVBoxLayout(box)
+        self.startup_toggle_btn = QPushButton("확인 중...")
+        self.startup_toggle_btn.setCheckable(True)
+        self.startup_toggle_btn.clicked.connect(self.on_toggle_startup)
+        vbox.addWidget(self.startup_toggle_btn)
+        hint = QLabel("켜면 컴퓨터를 켜고 로그인할 때 이 프로그램이 자동으로 실행되어 트레이에 상주합니다.")
+        hint.setWordWrap(True)
+        vbox.addWidget(hint)
+        return box
+
     def _build_schedule_group(self) -> QGroupBox:
         box = QGroupBox("자동 동기화 스케줄 (매일 08:00 / 12:00 / 18:00)")
         vbox = QVBoxLayout(box)
@@ -385,10 +433,31 @@ class MainWindow(QMainWindow):
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         vbox.addWidget(self.log_view)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
         refresh_btn = QPushButton("로그 새로고침")
         refresh_btn.clicked.connect(self.refresh_log)
-        vbox.addWidget(refresh_btn, alignment=Qt.AlignRight)
+        btn_row.addWidget(refresh_btn)
+        clear_btn = QPushButton("로그 삭제")
+        clear_btn.clicked.connect(self.on_clear_log)
+        btn_row.addWidget(clear_btn)
+        vbox.addLayout(btn_row)
         return box
+
+    def _refresh_startup_state(self) -> None:
+        registered = is_startup_registered()
+        self.startup_toggle_btn.blockSignals(True)
+        self.startup_toggle_btn.setChecked(registered)
+        self.startup_toggle_btn.setText(f"Windows 시작 시 자동 실행: {'ON' if registered else 'OFF'}")
+        self.startup_toggle_btn.blockSignals(False)
+
+    def on_toggle_startup(self, checked: bool) -> None:
+        try:
+            set_startup_registered(checked)
+        except OSError as exc:
+            QMessageBox.warning(self, "오류", f"시작 프로그램 등록에 실패했습니다.\n{exc}")
+        self._refresh_startup_state()
 
     def _browse_into(self, edit: QLineEdit) -> None:
         path = QFileDialog.getExistingDirectory(self, "폴더 선택", edit.text())
@@ -528,6 +597,25 @@ class MainWindow(QMainWindow):
             self.log_view.setPlainText("\n".join(lines))
         else:
             self.log_view.setPlainText("(아직 로그 없음)")
+
+    def on_clear_log(self) -> None:
+        state_dir = Path(self.cfg.get("StateDir", ""))
+        log_file = state_dir / "sync.log"
+        if not log_file.exists():
+            QMessageBox.information(self, "알림", "삭제할 로그가 없습니다.")
+            return
+        reply = QMessageBox.question(
+            self, "로그 삭제", "기존 로그를 삭제할까요? (동기화 자체에는 영향 없으며, 다음 동기화부터 새로 기록됩니다)",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            log_file.unlink()
+        except OSError as exc:
+            QMessageBox.warning(self, "오류", f"로그 삭제 실패: {exc}")
+            return
+        self.refresh_log()
 
     def check_latest_commit(self) -> None:
         if self._commit_worker is not None:

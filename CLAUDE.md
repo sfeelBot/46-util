@@ -41,7 +41,7 @@
 
 - 검증이 끝났다고 해서 바로 push하지 않는다.
 - push 전에 반드시 사용자에게 "GitHub에 push할지" 확인을 요청한다.
-- push 전에 READ.md 파일 및 processing.md 파일을 업데이트한 뒤, 해당 내용을 같이 push 할 수 있도록 한다.
+- push 전에 README.md 파일 및 processing.md 파일을 업데이트한 뒤, 해당 내용을 같이 push 할 수 있도록 한다. README.md 파일 작성 시 사용법에 대해서도 작성을 한다. 
 - 사용자가 동의한 경우에만 push한다. 동의 없이 임의로 push하지 않는다.
 
 ## 버그 / QA 기록 — util별 `QA.md`

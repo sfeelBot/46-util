@@ -71,3 +71,24 @@ Template matching → NMS로 상위 후보 추출 → score 높은 순으로 pix
 ```bash
 .venv\Scripts\python.exe utils\signal_noise_analyzer\main.py
 ```
+
+## 도구 (tools/)
+
+`utils/`의 image-processing util과 달리, 저장소 자체를 관리하기 위한 자동화 스크립트는 `tools/`에 둔다.
+
+### github_sync
+
+git 접근이 막힌 사내망 PC에서, GitHub 저장소의 새 push 여부를 08:00/12:00/18:00에 자동으로 확인하고
+변경이 있으면 "Download ZIP"과 동일한 방식(HTTPS zip 다운로드)으로 받아 로컬에 반영하는 PowerShell 스크립트.
+기존 `.venv`는 보존하고, 반영 후 `requirements.txt`로 `pip install`을 자동 실행한다.
+자세한 사용법은 [tools/github_sync/README.md](tools/github_sync/README.md) 참고.
+
+```powershell
+# 최초 1회: 설정값(대상 경로 등) 수정 후 스케줄 등록
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\github_sync\Register-ScheduledTasks.ps1
+
+# 수동 실행 / 테스트
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\github_sync\Sync-FromGitHub.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\github_sync\Sync-FromGitHub.ps1 -Force
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\github_sync\Sync-FromGitHub.ps1 -RecreateVenv
+```

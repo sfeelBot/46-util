@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem, QGraphicsPixmapItem,
     QSpinBox, QFileDialog, QMessageBox, QSizePolicy, QLineEdit,
     QGroupBox, QFormLayout, QSplitter, QFrame, QProgressDialog, QAbstractItemView,
-    QTableWidget, QTableWidgetItem, QHeaderView
+    QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QScrollArea
 )
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal, QObject
 from PyQt5.QtGui import (
@@ -409,7 +409,9 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
 
         self._folder: Path | None = None
+        self._scanned_paths: list[Path] = []
         self._image_paths: list[Path] = []
+        self._ext_checkboxes: dict[str, QCheckBox] = {}
         self._current_path: Path | None = None
         self._current_np = None
         self._raw_w = 0
@@ -479,6 +481,26 @@ class MainWindow(QMainWindow):
         list_frame = QFrame()
         list_layout = QVBoxLayout(list_frame)
         list_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 확장자 선택 (폴더 스캔 직후 채워지고, 체크된 확장자만 "목록 불러오기"로 반영됨)
+        ext_box = QGroupBox('불러올 확장자')
+        self._ext_layout = QHBoxLayout()
+        ext_scroll = QScrollArea()
+        ext_scroll.setWidgetResizable(True)
+        ext_scroll.setFixedHeight(50)
+        ext_inner = QWidget()
+        ext_inner.setLayout(self._ext_layout)
+        ext_scroll.setWidget(ext_inner)
+        ext_box_layout = QVBoxLayout()
+        ext_box_layout.addWidget(ext_scroll)
+        ext_box.setLayout(ext_box_layout)
+        list_layout.addWidget(ext_box)
+
+        self._btn_load_list = QPushButton('목록 불러오기')
+        self._btn_load_list.setEnabled(False)
+        self._btn_load_list.clicked.connect(self._on_load_list)
+        list_layout.addWidget(self._btn_load_list)
+
         list_layout.addWidget(QLabel('이미지 목록 (헤더 클릭 시 정렬)'))
         self._file_table = QTableWidget(0, 2)
         self._file_table.setHorizontalHeaderLabels(['파일명', '폴더'])
@@ -597,7 +619,46 @@ class MainWindow(QMainWindow):
         if not folder:
             return
         self._folder = Path(folder)
-        self._image_paths = list_images_in_folder(self._folder, recursive)
+        self._scanned_paths = list_images_in_folder(self._folder, recursive)
+        self._image_paths = []
+        self._file_table.setRowCount(0)
+
+        self._populate_extension_checkboxes()
+        self._btn_load_list.setEnabled(bool(self._scanned_paths))
+        self._lbl_status.setText(
+            f'{len(self._scanned_paths)}개 파일 발견 - 확장자를 선택하고 "목록 불러오기"를 누르세요.'
+        )
+
+    def _populate_extension_checkboxes(self):
+        for i in reversed(range(self._ext_layout.count())):
+            item = self._ext_layout.itemAt(i)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+            else:
+                self._ext_layout.removeItem(item)
+        self._ext_checkboxes.clear()
+
+        exts = sorted({p.suffix.lower() for p in self._scanned_paths})
+        if not exts:
+            self._ext_layout.addWidget(QLabel('(지원되는 이미지 파일 없음)'))
+            return
+        for ext in exts:
+            cb = QCheckBox(ext)
+            cb.setChecked(False)
+            self._ext_layout.addWidget(cb)
+            self._ext_checkboxes[ext] = cb
+        self._ext_layout.addStretch(1)
+
+    def _on_load_list(self):
+        if not self._scanned_paths:
+            return
+        selected_exts = {ext for ext, cb in self._ext_checkboxes.items() if cb.isChecked()}
+        if not selected_exts:
+            QMessageBox.warning(self, '확장자 선택 필요', '불러올 확장자를 하나 이상 선택하세요.')
+            return
+
+        self._image_paths = [p for p in self._scanned_paths if p.suffix.lower() in selected_exts]
 
         self._file_table.setSortingEnabled(False)
         self._file_table.setRowCount(len(self._image_paths))
@@ -613,6 +674,8 @@ class MainWindow(QMainWindow):
         self._lbl_status.setText(f'{len(self._image_paths)}개 이미지 로드됨')
         if self._image_paths:
             self._file_table.setCurrentCell(0, 0)
+        else:
+            QMessageBox.information(self, '알림', '선택한 확장자에 해당하는 파일이 없습니다.')
 
     def _on_file_selected(self, row: int, column: int = 0, prev_row: int = -1, prev_column: int = -1):
         if row < 0:

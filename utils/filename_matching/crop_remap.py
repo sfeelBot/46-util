@@ -29,8 +29,15 @@ CROP_SUFFIX_RE = re.compile(r"^(?P<base>.+)_(?P<idx>\d+)_x\d+y\d+w\d+h\d+$")
 STORAGE_RE = re.compile(r"Test#(?P<letter>[AB])(?P<lane>\d+)-(?P<serial>\d+)")
 
 
-def compute_remapped_filename(cropped_filename: str) -> tuple[Optional[str], str, str]:
-    """crop 파일명 -> (재구성된 원본 스타일 파일명 또는 None, status, reason)"""
+def compute_remapped_filename(
+    cropped_filename: str, ascending: bool = False
+) -> tuple[Optional[str], str, str]:
+    """crop 파일명 -> (재구성된 원본 스타일 파일명 또는 None, status, reason)
+
+    ascending=False(기본, 내림차순): crop1=원본 시리얼, crop2~4는 1씩 감소 (예: 4,3,2,1)
+    ascending=True(오름차순): crop4=원본 시리얼, crop1~3은 1씩 감소 (예: 1,2,3,4)
+    두 방식 모두 같은 4개 시리얼(serial-3~serial)을 다른 방향으로 배정할 뿐이다.
+    """
     name, ext = os.path.splitext(cropped_filename)
     suffix_match = CROP_SUFFIX_RE.match(name)
     if not suffix_match:
@@ -47,7 +54,7 @@ def compute_remapped_filename(cropped_filename: str) -> tuple[Optional[str], str
 
     serial_str = storage_match.group("serial")
     serial = int(serial_str)
-    new_serial = serial - (crop_index - 1)
+    new_serial = serial - (4 - crop_index) if ascending else serial - (crop_index - 1)
     if new_serial <= 0:
         return None, core.STATUS_NO_MATCH, f"계산된 시리얼 번호({new_serial})가 0 이하 (원본 시리얼/ROI번호 확인 필요)"
 
@@ -61,7 +68,7 @@ def compute_remapped_filename(cropped_filename: str) -> tuple[Optional[str], str
 
 
 def build_rows(
-    root: str, extensions: set[str], exclude_dir: Optional[str] = None
+    root: str, extensions: set[str], exclude_dir: Optional[str] = None, ascending: bool = False
 ) -> list[core.FileRow]:
     """core.FileRow 를 그대로 재사용 (final_name 자리에 재명명된 파일명을 넣는다).
 
@@ -71,7 +78,7 @@ def build_rows(
     rows: list[core.FileRow] = []
     for src_path, rel_dir in core.scan_files(root, extensions, exclude_dir=exclude_dir):
         filename = os.path.basename(src_path)
-        new_filename, status, reason = compute_remapped_filename(filename)
+        new_filename, status, reason = compute_remapped_filename(filename, ascending=ascending)
         rows.append(
             core.FileRow(
                 src_path=src_path,

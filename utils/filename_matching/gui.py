@@ -206,6 +206,9 @@ class CropRemapController:
     title = "Crop 이미지 재명명"
     final_col_label = "재명명된 파일명"
 
+    def __init__(self):
+        self.ascending = False
+
     def is_ready(self) -> bool:
         return True
 
@@ -213,7 +216,7 @@ class CropRemapController:
         pass
 
     def build_rows(self, root, extensions, exclude_dir):
-        return crop_remap.build_rows(root, extensions, exclude_dir=exclude_dir)
+        return crop_remap.build_rows(root, extensions, exclude_dir=exclude_dir, ascending=self.ascending)
 
     def build_extra_ui(self, tab: "ConversionTab", grid: QGridLayout, next_row: int) -> int:
         note = QLabel(
@@ -222,7 +225,16 @@ class CropRemapController:
         )
         note.setWordWrap(True)
         grid.addWidget(note, next_row, 0, 1, 4)
+        next_row += 1
+
+        cb_ascending = QCheckBox("오름차순으로 번호 매기기 (crop1→작은 번호 ... crop4→원본 번호, 기본은 내림차순)")
+        cb_ascending.setChecked(self.ascending)
+        cb_ascending.toggled.connect(self._on_ascending_toggled)
+        grid.addWidget(cb_ascending, next_row, 0, 1, 4)
         return next_row + 1
+
+    def _on_ascending_toggled(self, checked: bool):
+        self.ascending = checked
 
 
 # ============================================================

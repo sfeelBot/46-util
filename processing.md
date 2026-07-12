@@ -15,7 +15,7 @@
 | signal_noise_analyzer | 이미지 ROI를 이진화(threshold)하여 Signal / Noise1(σ_bg) / Noise2(bg_mean−bg_min)를 실시간 측정·저장하는 PyQt5 GUI 도구. 라인 프로파일, 폴더 탭, 결과 트리 제공 | [utils/signal_noise_analyzer/processing.md](utils/signal_noise_analyzer/processing.md) |
 | y_axis_masker | 지정한 y좌표 아래 영역을 검정/흰색/가우시안 블러/선택영역 평균값/스포이드 색상으로 마스킹하는 PyQt5 GUI 도구. Before/After 줌 뷰어, 하위 폴더 포함 스캔·다중 폴더 누적, 폴더 일괄·체크 적용, 목록 삭제(원본 보존), 파일명 검색 지원 | [utils/y_axis_masker/processing.md](utils/y_axis_masker/processing.md) |
 | github_sync_gui | 사내망 PC에서 GitHub 저장소를 zip 다운로드 방식으로 동기화하는 [tools/github_sync](tools/github_sync/README.md) 스크립트를 제어하는 PyQt5 GUI. 자동 동기화 스케줄(08/12/18시) on/off, 수동 동기화, 상태/로그 확인(삭제 가능), 경로 설정 제공. 시스템 트레이 상주(로고 아이콘 색상으로 ON/OFF 확인), Windows 시작 시 자동 실행 | [utils/github_sync_gui/processing.md](utils/github_sync_gui/processing.md) |
-| filename_matching | 이물검사 이미지 파일명 재가공 PyQt5 GUI (2탭). 탭1: (바코드 또는 저장번호)→셀번호→재료명 변환, 매칭실패 파일은 error 폴더에 자동 백업. 탭2: image_cropper로 4등분한 crop 이미지를 원래 개별 저장번호 파일명으로 재명명. 폴더 재귀 스캔·확장자 필터·최종명 미리보기·중복검사·우클릭 탐색기 열기·자유 리사이즈/셀 복사 테이블·비동기 일괄 변환(원본 보존, 복사만)·되돌리기(로그 기반) 공용 제공. 매핑표는 외부 CSV로 분리 | [utils/filename_matching/processing.md](utils/filename_matching/processing.md) |
+| filename_matching | 이물검사 이미지 파일명 재가공 PyQt5 GUI (2탭). 탭1: (바코드 또는 저장번호)→셀번호→재료명 변환, 매칭실패 파일은 error 폴더에 자동 백업. 탭2: image_cropper로 4등분한 crop 이미지를 원래 개별 저장번호 파일명으로 재명명(오름차순/내림차순 번호 매기기 옵션 제공). 폴더 재귀 스캔·확장자 필터·최종명 미리보기·중복검사·우클릭 탐색기 열기·자유 리사이즈/셀 복사 테이블·비동기 일괄 변환(원본 보존, 복사만)·되돌리기(로그 기반) 공용 제공. 매핑표는 외부 CSV로 분리 | [utils/filename_matching/processing.md](utils/filename_matching/processing.md) |
 
 ---
 

@@ -20,8 +20,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# 원본 파일명 안의 "YYYY-MM-DD-바코드-" 패턴에서 바코드를 추출한다.
+# 원본 파일명 안의 "YYYY-MM-DD-바코드-" 패턴에서 바코드를 추출한다 (구형 파일명).
 BARCODE_RE = re.compile(r"\d{4}-\d{2}-\d{2}-(\d+)-")
+
+# 신형 파일명 안의 "Test#A8-0000008" 같은 저장번호 패턴을 추출한다.
+STORAGE_RE = re.compile(r"Test#[AB]\d+-\d+")
 
 STATUS_OK = "정상"
 STATUS_NO_MATCH = "매칭실패"
@@ -54,6 +57,22 @@ def load_cell_material_map(path: str | Path) -> dict[str, str]:
             material = (row.get("material") or "").strip()
             if cell and material:
                 mapping[cell] = material
+    return mapping
+
+
+def load_storage_cellbarcode_map(path: str | Path) -> dict[str, str]:
+    """storage_number(예: Test#A8-0000008) -> cell_barcode(예: Test_2025_01_16_7632).
+
+    csv 컬럼: storage_number,cell_barcode
+    """
+    mapping: dict[str, str] = {}
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            storage_number = (row.get("storage_number") or "").strip()
+            cell_barcode = (row.get("cell_barcode") or "").strip()
+            if storage_number and cell_barcode:
+                mapping[storage_number] = cell_barcode
     return mapping
 
 
@@ -109,16 +128,34 @@ def compute_final_name(
     filename: str,
     barcode_cell_map: dict[str, str],
     cell_material_map: dict[str, str],
+    storage_cellbarcode_map: Optional[dict[str, str]] = None,
 ) -> tuple[Optional[str], str, str]:
     """원본 파일명 -> 최종 변환명.
 
+    바코드는 두 가지 방식 중 하나로 찾는다 (파일명 규칙이 시기별로 다르기 때문):
+    1. 구형: 파일명에 "YYYY-MM-DD-바코드-" 패턴이 직접 있는 경우 (BARCODE_RE)
+    2. 신형: 파일명에 "Test#A8-0000008" 같은 저장번호가 있고, storage_cellbarcode_map 으로
+       Cell Barcode(예: Test_2025_01_16_7632)를 먼저 찾은 뒤 그 마지막 "_" 이후 숫자를 바코드로 사용
+
     반환: (최종파일명 또는 None, status, reason)
     """
-    match = BARCODE_RE.search(filename)
-    if not match:
-        return None, STATUS_NO_MATCH, "파일명에서 바코드 패턴(YYYY-MM-DD-바코드-)을 찾을 수 없음"
+    storage_cellbarcode_map = storage_cellbarcode_map or {}
 
-    barcode = match.group(1)
+    match = BARCODE_RE.search(filename)
+    if match:
+        barcode = match.group(1)
+    else:
+        storage_match = STORAGE_RE.search(filename)
+        if not storage_match:
+            return None, STATUS_NO_MATCH, "파일명에서 바코드 또는 저장번호 패턴을 찾을 수 없음"
+
+        storage_number = storage_match.group(0)
+        cell_barcode = storage_cellbarcode_map.get(storage_number)
+        if cell_barcode is None:
+            return None, STATUS_NO_MATCH, f"저장번호 {storage_number} 가 매핑표에 없음"
+
+        barcode = cell_barcode.rsplit("_", 1)[-1]
+
     cell = barcode_cell_map.get(barcode)
     if cell is None:
         return None, STATUS_NO_MATCH, f"바코드 {barcode} 가 매핑표에 없음"
@@ -149,12 +186,13 @@ def build_rows(
     barcode_cell_map: dict[str, str],
     cell_material_map: dict[str, str],
     exclude_dir: Optional[str | Path] = None,
+    storage_cellbarcode_map: Optional[dict[str, str]] = None,
 ) -> list[FileRow]:
     rows: list[FileRow] = []
     for src_path, rel_dir in scan_files(root, extensions, exclude_dir=exclude_dir):
         filename = os.path.basename(src_path)
         final_name, status, reason = compute_final_name(
-            filename, barcode_cell_map, cell_material_map
+            filename, barcode_cell_map, cell_material_map, storage_cellbarcode_map
         )
         rows.append(
             FileRow(

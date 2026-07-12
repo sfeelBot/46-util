@@ -27,6 +27,16 @@ FILES = {
     "sub1/ignore.txt": b"should be filtered out by extension",
     "sub2/2025-01-16-7780-001.bmp": b"dummy-bmp-2",           # sub1 과 최종명이 같아져서 평탄화시 중복 발생
     "sub2/한글폴더/2025-01-16-7749-테스트한글.raw": "다른 한글 파일".encode("utf-8"),
+    # 신형 파일명 (GitHub 이슈 #2): "Test#A8-0000008" 같은 저장번호를 포함
+    "sub3/0_Test#A3-0000107-1-000-1_Insp_Ver_1_Vertical_Upper_20260711162533_952.raw": b"new-format-1",
+    # storage Test#A3-0000107 -> cell_barcode Test_2025_01_16_7780 -> barcode 7780 -> cell 83 -> CU400 (성공)
+    "sub3/0_Test#A1-0000001-1-000-1_Insp_Ver_1_Vertical_Upper_20260711162533_953.raw": b"new-format-2",
+    # storage Test#A1-0000001 -> cell_barcode Test_2025_01_16_7517 -> barcode 7517 -> cell 171 -> CU400 (성공)
+    # (이슈 #2 댓글로 barcode_cell_map.csv 가 247행으로 확장되면서 7517도 포함됨)
+    "sub3/0_Test#A9-9999999-1-000-1_Insp_Ver_1_Vertical_Upper_20260711162533_954.raw": b"new-format-3",
+    # storage Test#A9-9999999 자체가 storage_cellbarcode_map 에 없음 (매칭 실패)
+    "sub3/0_Test#A8-0000032-1-000-1_Insp_Ver_1_Vertical_Upper_20260711162533_955.raw": b"new-format-4",
+    # storage Test#A8-0000032 -> cell_barcode Test_2025_01_16_7747 -> barcode 7747 -> barcode_cell_map 에 없음 (매칭 실패)
 }
 
 for rel_path, content in FILES.items():

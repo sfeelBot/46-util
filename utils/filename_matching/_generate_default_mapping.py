@@ -1,5 +1,10 @@
-# barcode_to_cellNum.py / cellNum_to_barcode.py 에 하드코딩된 매핑표를
-# mapping/barcode_cell_map.csv, mapping/cell_material_map.csv 로 변환하는 1회용 스크립트.
+# [기록용, 재실행 금지] barcode_to_cellNum.py / cellNum_to_barcode.py 에 하드코딩됐던
+# "최초" 매핑표를 mapping/barcode_cell_map.csv, mapping/cell_material_map.csv 로
+# 변환했던 1회성 스크립트.
+#
+# 주의: barcode_cell_map.csv 는 이후 GitHub 이슈 #2(및 댓글)의 데이터로 110행 -> 247행으로
+# 갱신되었다. 이 스크립트를 다시 실행하면 그 갱신 내용이 110행짜리 구버전으로 되돌아가버리므로
+# 다시 실행하지 말 것. cell_material_map.csv 는 아직 이 스크립트의 값이 최신이다.
 import csv
 import os
 

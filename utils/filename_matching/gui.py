@@ -19,16 +19,17 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QTableWidget, QTableWidgetItem, QCheckBox,
     QFileDialog, QMessageBox, QGroupBox, QRadioButton, QButtonGroup,
     QPlainTextEdit, QMenu, QAbstractItemView, QHeaderView, QScrollArea,
-    QProgressBar,
+    QProgressBar, QShortcut,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QKeySequence
 
 import core
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_BARCODE_MAP = BASE_DIR / "mapping" / "barcode_cell_map.csv"
 DEFAULT_CELL_MAP = BASE_DIR / "mapping" / "cell_material_map.csv"
+DEFAULT_STORAGE_MAP = BASE_DIR / "mapping" / "storage_cellbarcode_map.csv"
 
 STATUS_COLORS = {
     core.STATUS_OK: None,
@@ -45,19 +46,20 @@ class ScanWorker(QThread):
     finished_ok = pyqtSignal(list)  # list[core.FileRow]
     failed = pyqtSignal(str)
 
-    def __init__(self, root, extensions, barcode_map, cell_map, exclude_dir, parent=None):
+    def __init__(self, root, extensions, barcode_map, cell_map, exclude_dir, storage_map, parent=None):
         super().__init__(parent)
         self._root = root
         self._extensions = extensions
         self._barcode_map = barcode_map
         self._cell_map = cell_map
         self._exclude_dir = exclude_dir
+        self._storage_map = storage_map
 
     def run(self) -> None:
         try:
             rows = core.build_rows(
                 self._root, self._extensions, self._barcode_map, self._cell_map,
-                exclude_dir=self._exclude_dir,
+                exclude_dir=self._exclude_dir, storage_cellbarcode_map=self._storage_map,
             )
         except Exception as e:
             self.failed.emit(str(e))
@@ -108,8 +110,10 @@ class MainWindow(QMainWindow):
 
         self.barcode_map_path = DEFAULT_BARCODE_MAP
         self.cell_map_path = DEFAULT_CELL_MAP
+        self.storage_map_path = DEFAULT_STORAGE_MAP
         self.barcode_map: dict[str, str] = {}
         self.cell_map: dict[str, str] = {}
+        self.storage_map: dict[str, str] = {}
 
         self._scan_worker: ScanWorker | None = None
         self._convert_worker: ConvertWorker | None = None
@@ -149,6 +153,13 @@ class MainWindow(QMainWindow):
         top_grid.addWidget(self.btn_load_cell_map, 2, 0)
         top_grid.addWidget(self.lbl_cell_map, 2, 1, 1, 3)
 
+        self.btn_load_storage_map = QPushButton("저장번호↔Cell Barcode 매핑 불러오기...")
+        self.btn_load_storage_map.clicked.connect(self.on_load_storage_map)
+        self.lbl_storage_map = QLabel(str(self.storage_map_path))
+        self.lbl_storage_map.setWordWrap(True)
+        top_grid.addWidget(self.btn_load_storage_map, 3, 0)
+        top_grid.addWidget(self.lbl_storage_map, 3, 1, 1, 3)
+
         root_layout.addLayout(top_grid)
 
         # --- 확장자 선택 영역 ---
@@ -182,13 +193,23 @@ class MainWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels(
             ["선택", "원본 파일명", "상대 경로", "최종 변환명", "상태", "사유"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(COL_NAME, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(COL_FINAL, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(COL_REASON, QHeaderView.Stretch)
+        # 모든 컬럼을 사용자가 드래그로 자유롭게 폭 조절할 수 있게 함 (Stretch 모드는 수동 조절 불가)
+        header = self.table.horizontalHeader()
+        for col in range(self.table.columnCount()):
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+        header.setStretchLastSection(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # 셀 단위로 드래그 선택 후 Ctrl+C 로 텍스트 복사 가능 (엑셀과 유사)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.on_table_context_menu)
+
+        copy_shortcut = QShortcut(QKeySequence.Copy, self.table)
+        copy_shortcut.setContext(Qt.WidgetShortcut)
+        copy_shortcut.activated.connect(self._copy_selected_cells)
+        self.table.itemChanged.connect(self._on_item_changed)
+
         root_layout.addWidget(self.table, stretch=1)
 
         # --- 출력/변환 영역 ---
@@ -251,6 +272,17 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "매핑 로드 실패", str(e))
             self._log(f"매핑 로드 실패: {e}")
 
+        # 저장번호↔Cell Barcode 매핑은 구형 파일명만 쓰는 환경에서는 없어도 되므로
+        # 실패해도 barcode/cell 매핑과 별개로 처리 (신형 파일명만 매칭 실패로 표시됨).
+        try:
+            self.storage_map = core.load_storage_cellbarcode_map(self.storage_map_path)
+            self._log(f"매핑 로드 완료: 저장번호↔Cell Barcode {len(self.storage_map)}건")
+        except Exception as e:
+            self.storage_map = {}
+            if not initial:
+                QMessageBox.critical(self, "매핑 로드 실패", str(e))
+            self._log(f"저장번호↔Cell Barcode 매핑 로드 실패(신형 파일명 매칭 불가): {e}")
+
     def on_load_barcode_map(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "바코드↔셀번호 매핑 CSV 선택", str(self.barcode_map_path.parent), "CSV (*.csv)"
@@ -269,6 +301,16 @@ class MainWindow(QMainWindow):
             return
         self.cell_map_path = Path(path)
         self.lbl_cell_map.setText(path)
+        self._load_mappings()
+
+    def on_load_storage_map(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "저장번호↔Cell Barcode 매핑 CSV 선택", str(self.storage_map_path.parent), "CSV (*.csv)"
+        )
+        if not path:
+            return
+        self.storage_map_path = Path(path)
+        self.lbl_storage_map.setText(path)
         self._load_mappings()
 
     # ------------------------------------------------------------------
@@ -321,7 +363,7 @@ class MainWindow(QMainWindow):
         self._log("스캔 시작...")
         self._scan_worker = ScanWorker(
             self.root_folder, selected_exts, self.barcode_map, self.cell_map,
-            exclude_dir=self.output_folder,
+            exclude_dir=self.output_folder, storage_map=self.storage_map,
         )
         self._scan_worker.finished_ok.connect(self._on_scan_finished)
         self._scan_worker.failed.connect(self._on_scan_failed)
@@ -362,7 +404,18 @@ class MainWindow(QMainWindow):
                 if item is not None:
                     item.setBackground(color if color else Qt.white)
 
-        self.table.itemChanged.connect(self._on_item_changed)
+        self.table.resizeColumnsToContents()  # 초기 폭은 내용에 맞춰 자동 조절, 이후 사용자가 자유롭게 재조절 가능
+
+    def _copy_selected_cells(self):
+        """선택된 셀(들)의 텍스트를 엑셀처럼 탭/줄바꿈으로 구분해 클립보드로 복사한다."""
+        indexes = self.table.selectionModel().selectedIndexes()
+        if not indexes:
+            return
+        rows = sorted({idx.row() for idx in indexes})
+        cols = sorted({idx.column() for idx in indexes})
+        cell_text = {(idx.row(), idx.column()): (idx.data() or "") for idx in indexes}
+        lines = ["\t".join(cell_text.get((r, c), "") for c in cols) for r in rows]
+        QApplication.clipboard().setText("\n".join(lines))
 
     def _on_item_changed(self, item: QTableWidgetItem):
         if item.column() != COL_CHECK:
@@ -531,9 +584,9 @@ class MainWindow(QMainWindow):
         조작(폴더/매핑 재선택, 중복 재실행, 되돌리기 등)을 잠가 둔다."""
         for w in (
             self.btn_select_folder, self.btn_load_barcode_map, self.btn_load_cell_map,
-            self.btn_load_list, self.btn_check_dup, self.btn_select_output,
-            self.btn_convert_all, self.btn_undo_last, self.btn_undo_log,
-            self.radio_flatten, self.radio_preserve,
+            self.btn_load_storage_map, self.btn_load_list, self.btn_check_dup,
+            self.btn_select_output, self.btn_convert_all, self.btn_undo_last,
+            self.btn_undo_log, self.radio_flatten, self.radio_preserve,
         ):
             w.setEnabled(not busy)
         if busy:

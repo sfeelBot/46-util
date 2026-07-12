@@ -10,7 +10,8 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QListWidget, QListWidgetItem, QGraphicsView,
     QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem, QGraphicsPixmapItem,
     QSpinBox, QFileDialog, QMessageBox, QSizePolicy, QLineEdit,
-    QGroupBox, QFormLayout, QSplitter, QFrame, QProgressDialog, QAbstractItemView
+    QGroupBox, QFormLayout, QSplitter, QFrame, QProgressDialog, QAbstractItemView,
+    QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal, QObject
 from PyQt5.QtGui import (
@@ -36,6 +37,23 @@ def parse_reference_filename(path: Path):
         'w': int(m.group('w')),
         'h': int(m.group('h')),
     }
+
+
+def list_images_in_folder(folder: Path, recursive: bool) -> list[Path]:
+    """Return sorted image paths under folder. When recursive, walks subfolders
+    but skips any 'cropped' subfolder (crop output) to avoid re-processing it."""
+    if recursive:
+        paths = [
+            p for p in folder.rglob('*')
+            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS
+            and 'cropped' not in p.relative_to(folder).parts[:-1]
+        ]
+    else:
+        paths = [
+            p for p in folder.iterdir()
+            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS
+        ]
+    return sorted(paths)
 
 
 def load_image_as_qpixmap(path: Path, raw_w: int = 0, raw_h: int = 0):
@@ -418,6 +436,11 @@ class MainWindow(QMainWindow):
         btn_folder.clicked.connect(self._on_select_folder)
         toolbar.addWidget(btn_folder)
 
+        btn_folder_recursive = QPushButton('📁 폴더 선택 (하위 폴더 포함)')
+        btn_folder_recursive.setFixedHeight(32)
+        btn_folder_recursive.clicked.connect(self._on_select_folder_recursive)
+        toolbar.addWidget(btn_folder_recursive)
+
         toolbar.addWidget(QLabel('  ROI 개수:'))
         self._spin_roi = QSpinBox()
         self._spin_roi.setRange(1, 999)
@@ -456,11 +479,19 @@ class MainWindow(QMainWindow):
         list_frame = QFrame()
         list_layout = QVBoxLayout(list_frame)
         list_layout.setContentsMargins(0, 0, 0, 0)
-        list_layout.addWidget(QLabel('이미지 목록'))
-        self._file_list = QListWidget()
-        self._file_list.setMinimumWidth(180)
-        self._file_list.currentRowChanged.connect(self._on_file_selected)
-        list_layout.addWidget(self._file_list, 1)
+        list_layout.addWidget(QLabel('이미지 목록 (헤더 클릭 시 정렬)'))
+        self._file_table = QTableWidget(0, 2)
+        self._file_table.setHorizontalHeaderLabels(['파일명', '폴더'])
+        self._file_table.setMinimumWidth(180)
+        self._file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._file_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._file_table.verticalHeader().setVisible(False)
+        self._file_table.setSortingEnabled(True)
+        self._file_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._file_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._file_table.currentCellChanged.connect(self._on_file_selected)
+        list_layout.addWidget(self._file_table, 1)
 
         # Reference images (parse XYWH from filename → load as ROIs)
         list_layout.addWidget(QLabel('레퍼런스 이미지 (파일명에서 XYWH 파싱)'))
@@ -556,25 +587,40 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ slots
 
     def _on_select_folder(self):
+        self._load_folder(recursive=False)
+
+    def _on_select_folder_recursive(self):
+        self._load_folder(recursive=True)
+
+    def _load_folder(self, recursive: bool):
         folder = QFileDialog.getExistingDirectory(self, '폴더 선택', str(self._folder or Path.home()))
         if not folder:
             return
         self._folder = Path(folder)
-        self._image_paths = sorted(
-            p for p in self._folder.iterdir()
-            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS
-        )
-        self._file_list.clear()
-        for p in self._image_paths:
-            self._file_list.addItem(p.name)
+        self._image_paths = list_images_in_folder(self._folder, recursive)
+
+        self._file_table.setSortingEnabled(False)
+        self._file_table.setRowCount(len(self._image_paths))
+        for row, p in enumerate(self._image_paths):
+            rel_parent = p.relative_to(self._folder).parent
+            folder_txt = '' if str(rel_parent) == '.' else str(rel_parent)
+            name_item = QTableWidgetItem(p.name)
+            name_item.setData(Qt.UserRole, str(p))
+            self._file_table.setItem(row, 0, name_item)
+            self._file_table.setItem(row, 1, QTableWidgetItem(folder_txt))
+        self._file_table.setSortingEnabled(True)
+
         self._lbl_status.setText(f'{len(self._image_paths)}개 이미지 로드됨')
         if self._image_paths:
-            self._file_list.setCurrentRow(0)
+            self._file_table.setCurrentCell(0, 0)
 
-    def _on_file_selected(self, row: int):
-        if row < 0 or row >= len(self._image_paths):
+    def _on_file_selected(self, row: int, column: int = 0, prev_row: int = -1, prev_column: int = -1):
+        if row < 0:
             return
-        path = self._image_paths[row]
+        item = self._file_table.item(row, 0)
+        if item is None:
+            return
+        path = Path(item.data(Qt.UserRole))
         self._current_path = path
         self._viewer.clear_rois()
         self._update_roi_label()

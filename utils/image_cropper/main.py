@@ -224,6 +224,14 @@ class ImageViewer(QGraphicsView):
         self._selected_item = None
         self._next_roi_idx = 1
 
+    def clear_scene(self):
+        """Remove the loaded image and all ROIs, leaving an empty canvas."""
+        self._scene.clear()
+        self._pixmap_item = None
+        self._roi_items.clear()
+        self._selected_item = None
+        self._next_roi_idx = 1
+
     def load_pixmap(self, pixmap: QPixmap):
         self._scene.clear()
         self._roi_items.clear()
@@ -496,10 +504,16 @@ class MainWindow(QMainWindow):
         ext_box.setLayout(ext_box_layout)
         list_layout.addWidget(ext_box)
 
+        list_btn_row = QHBoxLayout()
         self._btn_load_list = QPushButton('목록 불러오기')
         self._btn_load_list.setEnabled(False)
         self._btn_load_list.clicked.connect(self._on_load_list)
-        list_layout.addWidget(self._btn_load_list)
+        list_btn_row.addWidget(self._btn_load_list)
+
+        self._btn_clear_list = QPushButton('이미지 목록 모두 지우기')
+        self._btn_clear_list.clicked.connect(self._on_clear_file_list)
+        list_btn_row.addWidget(self._btn_clear_list)
+        list_layout.addLayout(list_btn_row)
 
         list_layout.addWidget(QLabel('이미지 목록 (헤더 클릭 시 정렬)'))
         self._file_table = QTableWidget(0, 2)
@@ -676,6 +690,18 @@ class MainWindow(QMainWindow):
             self._file_table.setCurrentCell(0, 0)
         else:
             QMessageBox.information(self, '알림', '선택한 확장자에 해당하는 파일이 없습니다.')
+
+    def _on_clear_file_list(self):
+        self._file_table.setRowCount(0)
+        self._image_paths = []
+        self._scanned_paths = []
+        self._current_path = None
+        self._current_np = None
+        self._btn_load_list.setEnabled(False)
+        self._populate_extension_checkboxes()
+        self._viewer.clear_scene()
+        self._update_roi_label()
+        self._lbl_status.setText('이미지 목록을 지웠습니다. 폴더를 다시 선택하세요.')
 
     def _on_file_selected(self, row: int, column: int = 0, prev_row: int = -1, prev_column: int = -1):
         if row < 0:

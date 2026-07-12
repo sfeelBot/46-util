@@ -8,3 +8,6 @@ __pycache__/
 utils/github_sync_gui/build/
 utils/github_sync_gui/dist/
 utils/github_sync_gui/*.spec
+utils/image_cropper/build/
+utils/image_cropper/dist/
+utils/image_cropper/*.spec

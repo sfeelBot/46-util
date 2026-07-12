@@ -37,6 +37,20 @@ FILES = {
     # storage Test#A9-9999999 자체가 storage_cellbarcode_map 에 없음 (매칭 실패)
     "sub3/0_Test#A8-0000032-1-000-1_Insp_Ver_1_Vertical_Upper_20260711162533_955.raw": b"new-format-4",
     # storage Test#A8-0000032 -> cell_barcode Test_2025_01_16_7747 -> barcode 7747 -> barcode_cell_map 에 없음 (매칭 실패)
+    # ===== crop_remap 탭(Crop 이미지 재명명) 테스트용: image_cropper 출력 형식 =====
+    # 원본(자르기 전) 파일명의 저장번호는 Test#A4-0000004 (시리얼 4, 4의 배수)
+    "cropped/0_Test#A4-0000004-1-000-1_Insp_960_1_x0y0w100h100.raw": b"crop-1",
+    # crop 1 -> 시리얼 그대로(4) -> 재명명: ..._Test#A4-0000004-1-000-1_Insp_960.raw
+    "cropped/0_Test#A4-0000004-1-000-1_Insp_960_2_x100y0w100h100.raw": b"crop-2",
+    # crop 2 -> 시리얼 3 -> Test#A3-0000003
+    "cropped/0_Test#A4-0000004-1-000-1_Insp_960_3_x0y100w100h100.raw": b"crop-3",
+    # crop 3 -> 시리얼 2 -> Test#A2-0000002
+    "cropped/0_Test#A4-0000004-1-000-1_Insp_960_4_x100y100w100h100.raw": b"crop-4",
+    # crop 4 -> 시리얼 1 -> Test#A1-0000001
+    "cropped/not_a_crop_file.raw": b"crop-invalid-1",
+    # 매칭 실패: image_cropper 출력 형식(_{idx}_x..y..w..h..)이 아님
+    "cropped/0_Test#A4-0000004-1-000-1_Insp_960_5_x0y0w100h100.raw": b"crop-invalid-2",
+    # 매칭 실패: ROI 번호 5 는 1~4 범위 밖
 }
 
 for rel_path, content in FILES.items():

@@ -253,26 +253,54 @@ class ConversionConflictError(Exception):
         self.conflicts = conflicts
 
 
+ERROR_SUBDIR = "error"
+
+
 def _dest_path(row: FileRow, output_dir: str, flatten: bool) -> str:
     if flatten:
         return os.path.join(output_dir, row.final_name)
     return os.path.join(output_dir, row.rel_dir, row.final_name)
 
 
-def check_conflicts(rows: list[FileRow], output_dir: str, flatten: bool) -> list[str]:
+def _error_dest_path(row: FileRow, output_dir: str, flatten: bool) -> str:
+    """매칭실패 행을 원본 파일명 그대로 output_dir/error/ 하위에 저장할 목적지 경로."""
+    if flatten:
+        return os.path.join(output_dir, ERROR_SUBDIR, row.filename)
+    return os.path.join(output_dir, ERROR_SUBDIR, row.rel_dir, row.filename)
+
+
+def _ok_targets(rows: list[FileRow]) -> list[FileRow]:
+    return [
+        row for row in rows
+        if row.checked and row.status == STATUS_OK and row.final_name is not None
+    ]
+
+
+def _error_targets(rows: list[FileRow], copy_errors: bool) -> list[FileRow]:
+    if not copy_errors:
+        return []
+    return [row for row in rows if row.status == STATUS_NO_MATCH]
+
+
+def check_conflicts(
+    rows: list[FileRow], output_dir: str, flatten: bool, copy_errors: bool = True
+) -> list[str]:
     """실제 복사 전에 목적지 경로 충돌을 확인한다.
 
-    - 선택된(checked) 행들끼리 목적지 경로가 겹치는 경우
+    - 선택된(checked) 정상 행들끼리, 그리고 매칭실패(에러) 행들끼리 목적지 경로가 겹치는 경우
     - 목적지에 이미 같은 이름의 파일이 존재하는 경우 (이전 실행 결과 등)
     둘 다 충돌로 취급하고, 충돌 목적지 경로 목록을 반환한다 (없으면 빈 리스트).
     """
     targets: dict[str, int] = {}
     conflicts: set[str] = set()
 
-    for row in rows:
-        if not row.checked or row.status != STATUS_OK or row.final_name is None:
-            continue
-        dest = _dest_path(row, output_dir, flatten)
+    dest_pairs = [(row, _dest_path(row, output_dir, flatten)) for row in _ok_targets(rows)]
+    dest_pairs += [
+        (row, _error_dest_path(row, output_dir, flatten))
+        for row in _error_targets(rows, copy_errors)
+    ]
+
+    for _row, dest in dest_pairs:
         if dest in targets:
             conflicts.add(dest)
         else:
@@ -288,8 +316,12 @@ def convert_files(
     output_dir: str | Path,
     flatten: bool,
     progress_cb=None,
+    copy_errors: bool = True,
 ) -> dict:
     """checked=True, status==정상 인 행들을 output_dir 로 복사(원본 보존)한다.
+
+    copy_errors=True(기본값) 이면 status==매칭실패 인 행들도 체크 여부와 무관하게
+    output_dir/error/ 하위에 원본 파일명 그대로 함께 복사한다 (되돌리기 대상에도 포함됨).
 
     사전에 반드시 check_conflicts() 로 충돌이 없는지 확인해야 한다.
     충돌이 있는 상태로 호출하면 ConversionConflictError 를 던진다.
@@ -298,24 +330,33 @@ def convert_files(
     반환: 되돌리기에 사용할 로그 dict.
     """
     output_dir = str(output_dir)
-    conflicts = check_conflicts(rows, output_dir, flatten)
+    conflicts = check_conflicts(rows, output_dir, flatten, copy_errors=copy_errors)
     if conflicts:
         raise ConversionConflictError(conflicts)
 
     os.makedirs(output_dir, exist_ok=True)
 
-    targets = [
-        row for row in rows
-        if row.checked and row.status == STATUS_OK and row.final_name is not None
-    ]
-    total = len(targets)
+    ok_targets = _ok_targets(rows)
+    error_targets = _error_targets(rows, copy_errors)
+    total = len(ok_targets) + len(error_targets)
 
     entries = []
-    for done, row in enumerate(targets, start=1):
+    done = 0
+    for row in ok_targets:
         dest = _dest_path(row, output_dir, flatten)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         shutil.copy2(row.src_path, dest)
         entries.append({"src": row.src_path, "dst": dest})
+        done += 1
+        if progress_cb is not None:
+            progress_cb(done, total)
+
+    for row in error_targets:
+        dest = _error_dest_path(row, output_dir, flatten)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(row.src_path, dest)
+        entries.append({"src": row.src_path, "dst": dest})
+        done += 1
         if progress_cb is not None:
             progress_cb(done, total)
 

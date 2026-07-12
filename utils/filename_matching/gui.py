@@ -1,11 +1,21 @@
-"""파일명 변환 GUI (바코드 -> 셀번호 -> 재료명 파이프라인 통합).
+"""파일명 변환 GUI.
 
-폴더를 선택하면 하위 폴더까지 재귀 스캔해서 지정한 확장자의 파일을 모두
-불러오고, 최종 변환명을 미리보기로 보여준다. 중복검사, 목록 우클릭으로
-탐색기 열기, 체크된 항목만 골라서 일괄 변환(원본은 항상 보존, 복사만
-수행), 방금 실행한 변환(또는 이전 로그)을 되돌리는 기능을 제공한다.
+탭 2개로 구성된다:
 
-로직은 core.py 에 GUI 비의존적으로 분리되어 있다.
+1. "바코드 → 재료명 변환" — 원본 이미지 파일명을 (바코드 또는 저장번호) → 셀번호 → 재료명
+   순으로 재가공한다 (core.py). 매칭에 실패한 파일은 체크 여부와 무관하게 출력 폴더의
+   `error/` 하위에 원본 파일명 그대로 함께 복사되어 나중에 확인할 수 있다.
+2. "Crop 이미지 재명명" — image_cropper 로 4등분한 crop 이미지들을, 원래 개별 촬영이었다면
+   가졌을 저장번호 기반 파일명으로 되돌린다 (crop_remap.py). 결과는 재명명된 파일 자체이며,
+   이후 1번 탭에 다시 입력해 바코드→재료명 변환까지 이어갈 수 있다.
+
+두 탭 모두 폴더 재귀 스캔, 확장자 필터, 최종명 미리보기, 중복검사, 우클릭 탐색기 열기,
+자유 리사이즈/셀 복사 가능한 테이블, 비동기 일괄 변환(원본 보존, 복사만), 되돌리기(로그
+기반)라는 공통 워크플로를 공유하며 `ConversionTab` 하나로 구현되어 있다. 각 탭이 실제
+행(목록)을 어떻게 만드는지는 컨트롤러 객체(`BarcodeMaterialController`/`CropRemapController`)
+가 담당한다.
+
+로직은 core.py / crop_remap.py 에 GUI 비의존적으로 분리되어 있다.
 """
 from __future__ import annotations
 
@@ -19,12 +29,13 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QTableWidget, QTableWidgetItem, QCheckBox,
     QFileDialog, QMessageBox, QGroupBox, QRadioButton, QButtonGroup,
     QPlainTextEdit, QMenu, QAbstractItemView, QHeaderView, QScrollArea,
-    QProgressBar, QShortcut,
+    QProgressBar, QShortcut, QTabWidget,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence
 
 import core
+import crop_remap
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_BARCODE_MAP = BASE_DIR / "mapping" / "barcode_cell_map.csv"
@@ -40,27 +51,22 @@ STATUS_COLORS = {
 COL_CHECK, COL_NAME, COL_RELDIR, COL_FINAL, COL_STATUS, COL_REASON = range(6)
 
 
+# ============================================================
+# 백그라운드 워커 (두 탭 공용)
+# ============================================================
 class ScanWorker(QThread):
     """폴더 재귀 스캔 + 변환명 계산을 메인 스레드 밖에서 수행한다."""
 
     finished_ok = pyqtSignal(list)  # list[core.FileRow]
     failed = pyqtSignal(str)
 
-    def __init__(self, root, extensions, barcode_map, cell_map, exclude_dir, storage_map, parent=None):
+    def __init__(self, build_fn, parent=None):
         super().__init__(parent)
-        self._root = root
-        self._extensions = extensions
-        self._barcode_map = barcode_map
-        self._cell_map = cell_map
-        self._exclude_dir = exclude_dir
-        self._storage_map = storage_map
+        self._build_fn = build_fn  # () -> list[core.FileRow]
 
     def run(self) -> None:
         try:
-            rows = core.build_rows(
-                self._root, self._extensions, self._barcode_map, self._cell_map,
-                exclude_dir=self._exclude_dir, storage_cellbarcode_map=self._storage_map,
-            )
+            rows = self._build_fn()
         except Exception as e:
             self.failed.emit(str(e))
             return
@@ -75,17 +81,19 @@ class ConvertWorker(QThread):
     conflict = pyqtSignal(list)  # conflict dest paths
     progress = pyqtSignal(int, int)  # done, total
 
-    def __init__(self, rows, output_dir, flatten, parent=None):
+    def __init__(self, rows, output_dir, flatten, copy_errors=True, parent=None):
         super().__init__(parent)
         self._rows = rows
         self._output_dir = output_dir
         self._flatten = flatten
+        self._copy_errors = copy_errors
 
     def run(self) -> None:
         try:
             log = core.convert_files(
                 self._rows, self._output_dir, self._flatten,
                 progress_cb=lambda done, total: self.progress.emit(done, total),
+                copy_errors=self._copy_errors,
             )
         except core.ConversionConflictError as e:
             self.conflict.emit(e.conflicts)
@@ -96,18 +104,16 @@ class ConvertWorker(QThread):
         self.finished_ok.emit(log)
 
 
-class MainWindow(QMainWindow):
+# ============================================================
+# 탭별 컨트롤러: "행을 어떻게 만드는지"만 담당 (탭 UI/워크플로는 ConversionTab 이 공용으로 처리)
+# ============================================================
+class BarcodeMaterialController:
+    """탭 1: (바코드/저장번호) → 셀번호 → 재료명."""
+
+    title = "바코드 → 재료명 변환"
+    final_col_label = "최종 변환명"
+
     def __init__(self):
-        super().__init__()
-        self.setWindowTitle("파일명 변환기 (바코드 → 셀번호 → 재료명)")
-        self.resize(1200, 720)
-
-        self.root_folder: str | None = None
-        self.output_folder: str | None = None
-        self.rows: list[core.FileRow] = []
-        self.ext_checkboxes: dict[str, QCheckBox] = {}
-        self.last_log: dict | None = None
-
         self.barcode_map_path = DEFAULT_BARCODE_MAP
         self.cell_map_path = DEFAULT_CELL_MAP
         self.storage_map_path = DEFAULT_STORAGE_MAP
@@ -115,21 +121,138 @@ class MainWindow(QMainWindow):
         self.cell_map: dict[str, str] = {}
         self.storage_map: dict[str, str] = {}
 
+    def is_ready(self) -> bool:
+        return bool(self.barcode_map and self.cell_map)
+
+    def build_rows(self, root, extensions, exclude_dir):
+        return core.build_rows(
+            root, extensions, self.barcode_map, self.cell_map,
+            exclude_dir=exclude_dir, storage_cellbarcode_map=self.storage_map,
+        )
+
+    def on_tab_ready(self, tab: "ConversionTab"):
+        """탭의 UI(로그 영역 포함)가 완전히 준비된 뒤 최초 1회 호출됨."""
+        self.load_mappings(tab, initial=True)
+
+    def build_extra_ui(self, tab: "ConversionTab", grid: QGridLayout, next_row: int) -> int:
+        """매핑 3종 선택 UI를 top_grid 에 추가하고, 다음에 쓸 grid row 번호를 반환한다."""
+        btn_barcode = QPushButton("바코드↔셀번호 매핑 불러오기...")
+        lbl_barcode = QLabel(str(self.barcode_map_path))
+        lbl_barcode.setWordWrap(True)
+        btn_barcode.clicked.connect(lambda: self._on_load_map(tab, "barcode_map_path", lbl_barcode,
+                                                                "바코드↔셀번호 매핑 CSV 선택"))
+        grid.addWidget(btn_barcode, next_row, 0)
+        grid.addWidget(lbl_barcode, next_row, 1, 1, 3)
+        next_row += 1
+
+        btn_cell = QPushButton("셀번호↔재료명 매핑 불러오기...")
+        lbl_cell = QLabel(str(self.cell_map_path))
+        lbl_cell.setWordWrap(True)
+        btn_cell.clicked.connect(lambda: self._on_load_map(tab, "cell_map_path", lbl_cell,
+                                                             "셀번호↔재료명 매핑 CSV 선택"))
+        grid.addWidget(btn_cell, next_row, 0)
+        grid.addWidget(lbl_cell, next_row, 1, 1, 3)
+        next_row += 1
+
+        btn_storage = QPushButton("저장번호↔Cell Barcode 매핑 불러오기...")
+        lbl_storage = QLabel(str(self.storage_map_path))
+        lbl_storage.setWordWrap(True)
+        btn_storage.clicked.connect(lambda: self._on_load_map(tab, "storage_map_path", lbl_storage,
+                                                                "저장번호↔Cell Barcode 매핑 CSV 선택"))
+        grid.addWidget(btn_storage, next_row, 0)
+        grid.addWidget(lbl_storage, next_row, 1, 1, 3)
+        next_row += 1
+
+        tab._extra_lock_widgets.extend([btn_barcode, btn_cell, btn_storage])
+        return next_row
+
+    def _on_load_map(self, tab: "ConversionTab", attr_name: str, label: QLabel, dialog_title: str):
+        current = getattr(self, attr_name)
+        path, _ = QFileDialog.getOpenFileName(tab, dialog_title, str(current.parent), "CSV (*.csv)")
+        if not path:
+            return
+        setattr(self, attr_name, Path(path))
+        label.setText(path)
+        self.load_mappings(tab)
+
+    def load_mappings(self, tab: "ConversionTab", initial=False):
+        try:
+            self.barcode_map = core.load_barcode_cell_map(self.barcode_map_path)
+            self.cell_map = core.load_cell_material_map(self.cell_map_path)
+            tab._log(
+                f"매핑 로드 완료: 바코드↔셀 {len(self.barcode_map)}건, "
+                f"셀↔재료 {len(self.cell_map)}건"
+            )
+        except Exception as e:
+            if not initial:
+                QMessageBox.critical(tab, "매핑 로드 실패", str(e))
+            tab._log(f"매핑 로드 실패: {e}")
+
+        # 저장번호↔Cell Barcode 매핑은 구형 파일명만 쓰는 환경에서는 없어도 되므로
+        # 실패해도 barcode/cell 매핑과 별개로 처리 (신형 파일명만 매칭 실패로 표시됨).
+        try:
+            self.storage_map = core.load_storage_cellbarcode_map(self.storage_map_path)
+            tab._log(f"매핑 로드 완료: 저장번호↔Cell Barcode {len(self.storage_map)}건")
+        except Exception as e:
+            self.storage_map = {}
+            if not initial:
+                QMessageBox.critical(tab, "매핑 로드 실패", str(e))
+            tab._log(f"저장번호↔Cell Barcode 매핑 로드 실패(신형 파일명 매칭 불가): {e}")
+
+
+class CropRemapController:
+    """탭 2: image_cropper 출력(crop 1~4) → 재구성된 개별 저장번호 파일명."""
+
+    title = "Crop 이미지 재명명"
+    final_col_label = "재명명된 파일명"
+
+    def is_ready(self) -> bool:
+        return True
+
+    def on_tab_ready(self, tab: "ConversionTab"):
+        pass
+
+    def build_rows(self, root, extensions, exclude_dir):
+        return crop_remap.build_rows(root, extensions, exclude_dir=exclude_dir)
+
+    def build_extra_ui(self, tab: "ConversionTab", grid: QGridLayout, next_row: int) -> int:
+        note = QLabel(
+            "image_cropper 출력 폴더(cropped/)를 선택하세요. "
+            "파일명 규칙: {원본파일명}_{ROI번호}_x{x}y{y}w{w}h{h}{확장자} (ROI번호 1~4)"
+        )
+        note.setWordWrap(True)
+        grid.addWidget(note, next_row, 0, 1, 4)
+        return next_row + 1
+
+
+# ============================================================
+# 공용 탭 위젯
+# ============================================================
+class ConversionTab(QWidget):
+    def __init__(self, controller, parent=None):
+        super().__init__(parent)
+        self.controller = controller
+
+        self.root_folder: str | None = None
+        self.output_folder: str | None = None
+        self.rows: list[core.FileRow] = []
+        self.ext_checkboxes: dict[str, QCheckBox] = {}
+        self.last_log: dict | None = None
+        self._extra_lock_widgets: list[QWidget] = []
+
         self._scan_worker: ScanWorker | None = None
         self._convert_worker: ConvertWorker | None = None
 
         self._build_ui()
-        self._load_mappings(initial=True)
+        self.controller.on_tab_ready(self)
 
     # ------------------------------------------------------------------
     # UI 구성
     # ------------------------------------------------------------------
     def _build_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
+        root_layout = QVBoxLayout(self)
 
-        # --- 폴더/매핑 선택 영역 ---
+        # --- 폴더 선택 + 탭별 추가 UI(매핑 선택 등) ---
         top_grid = QGridLayout()
 
         self.btn_select_folder = QPushButton("폴더 선택...")
@@ -139,27 +262,7 @@ class MainWindow(QMainWindow):
         top_grid.addWidget(self.btn_select_folder, 0, 0)
         top_grid.addWidget(self.lbl_folder, 0, 1, 1, 3)
 
-        self.btn_load_barcode_map = QPushButton("바코드↔셀번호 매핑 불러오기...")
-        self.btn_load_barcode_map.clicked.connect(self.on_load_barcode_map)
-        self.lbl_barcode_map = QLabel(str(self.barcode_map_path))
-        self.lbl_barcode_map.setWordWrap(True)
-        top_grid.addWidget(self.btn_load_barcode_map, 1, 0)
-        top_grid.addWidget(self.lbl_barcode_map, 1, 1, 1, 3)
-
-        self.btn_load_cell_map = QPushButton("셀번호↔재료명 매핑 불러오기...")
-        self.btn_load_cell_map.clicked.connect(self.on_load_cell_map)
-        self.lbl_cell_map = QLabel(str(self.cell_map_path))
-        self.lbl_cell_map.setWordWrap(True)
-        top_grid.addWidget(self.btn_load_cell_map, 2, 0)
-        top_grid.addWidget(self.lbl_cell_map, 2, 1, 1, 3)
-
-        self.btn_load_storage_map = QPushButton("저장번호↔Cell Barcode 매핑 불러오기...")
-        self.btn_load_storage_map.clicked.connect(self.on_load_storage_map)
-        self.lbl_storage_map = QLabel(str(self.storage_map_path))
-        self.lbl_storage_map.setWordWrap(True)
-        top_grid.addWidget(self.btn_load_storage_map, 3, 0)
-        top_grid.addWidget(self.lbl_storage_map, 3, 1, 1, 3)
-
+        self.controller.build_extra_ui(self, top_grid, 1)
         root_layout.addLayout(top_grid)
 
         # --- 확장자 선택 영역 ---
@@ -191,7 +294,7 @@ class MainWindow(QMainWindow):
         # --- 테이블 ---
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["선택", "원본 파일명", "상대 경로", "최종 변환명", "상태", "사유"]
+            ["선택", "원본 파일명", "상대 경로", self.controller.final_col_label, "상태", "사유"]
         )
         # 모든 컬럼을 사용자가 드래그로 자유롭게 폭 조절할 수 있게 함 (Stretch 모드는 수동 조절 불가)
         header = self.table.horizontalHeader()
@@ -257,63 +360,6 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.log_view)
 
     # ------------------------------------------------------------------
-    # 매핑 로드
-    # ------------------------------------------------------------------
-    def _load_mappings(self, initial=False):
-        try:
-            self.barcode_map = core.load_barcode_cell_map(self.barcode_map_path)
-            self.cell_map = core.load_cell_material_map(self.cell_map_path)
-            self._log(
-                f"매핑 로드 완료: 바코드↔셀 {len(self.barcode_map)}건, "
-                f"셀↔재료 {len(self.cell_map)}건"
-            )
-        except Exception as e:
-            if not initial:
-                QMessageBox.critical(self, "매핑 로드 실패", str(e))
-            self._log(f"매핑 로드 실패: {e}")
-
-        # 저장번호↔Cell Barcode 매핑은 구형 파일명만 쓰는 환경에서는 없어도 되므로
-        # 실패해도 barcode/cell 매핑과 별개로 처리 (신형 파일명만 매칭 실패로 표시됨).
-        try:
-            self.storage_map = core.load_storage_cellbarcode_map(self.storage_map_path)
-            self._log(f"매핑 로드 완료: 저장번호↔Cell Barcode {len(self.storage_map)}건")
-        except Exception as e:
-            self.storage_map = {}
-            if not initial:
-                QMessageBox.critical(self, "매핑 로드 실패", str(e))
-            self._log(f"저장번호↔Cell Barcode 매핑 로드 실패(신형 파일명 매칭 불가): {e}")
-
-    def on_load_barcode_map(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "바코드↔셀번호 매핑 CSV 선택", str(self.barcode_map_path.parent), "CSV (*.csv)"
-        )
-        if not path:
-            return
-        self.barcode_map_path = Path(path)
-        self.lbl_barcode_map.setText(path)
-        self._load_mappings()
-
-    def on_load_cell_map(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "셀번호↔재료명 매핑 CSV 선택", str(self.cell_map_path.parent), "CSV (*.csv)"
-        )
-        if not path:
-            return
-        self.cell_map_path = Path(path)
-        self.lbl_cell_map.setText(path)
-        self._load_mappings()
-
-    def on_load_storage_map(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "저장번호↔Cell Barcode 매핑 CSV 선택", str(self.storage_map_path.parent), "CSV (*.csv)"
-        )
-        if not path:
-            return
-        self.storage_map_path = Path(path)
-        self.lbl_storage_map.setText(path)
-        self._load_mappings()
-
-    # ------------------------------------------------------------------
     # 폴더 선택 / 확장자 탐색
     # ------------------------------------------------------------------
     def on_select_folder(self):
@@ -355,16 +401,16 @@ class MainWindow(QMainWindow):
         if not selected_exts:
             QMessageBox.warning(self, "확장자 선택 필요", "불러올 확장자를 하나 이상 선택하세요.")
             return
-        if not self.barcode_map or not self.cell_map:
+        if not self.controller.is_ready():
             QMessageBox.warning(self, "매핑 없음", "매핑 파일이 로드되지 않았습니다.")
             return
 
         self._set_busy(True, "스캔 중...")
         self._log("스캔 시작...")
-        self._scan_worker = ScanWorker(
-            self.root_folder, selected_exts, self.barcode_map, self.cell_map,
-            exclude_dir=self.output_folder, storage_map=self.storage_map,
-        )
+        root_folder = self.root_folder
+        output_folder = self.output_folder
+        build_fn = lambda: self.controller.build_rows(root_folder, selected_exts, output_folder)
+        self._scan_worker = ScanWorker(build_fn)
         self._scan_worker.finished_ok.connect(self._on_scan_finished)
         self._scan_worker.failed.connect(self._on_scan_failed)
         self._scan_worker.start()
@@ -486,7 +532,8 @@ class MainWindow(QMainWindow):
             return
 
         checked_ok = [r for r in self.rows if r.checked and r.status == core.STATUS_OK]
-        if not checked_ok:
+        error_rows = [r for r in self.rows if r.status == core.STATUS_NO_MATCH]
+        if not checked_ok and not error_rows:
             QMessageBox.warning(self, "변환 대상 없음", "선택되고 매칭에 성공한 파일이 없습니다.")
             return
 
@@ -503,20 +550,22 @@ class MainWindow(QMainWindow):
             self._log(f"변환 취소: 충돌 {len(conflicts)}건")
             return
 
+        error_note = f"\n매칭실패 {len(error_rows)}건은 'error' 폴더에 원본 이름으로 함께 복사됩니다." if error_rows else ""
         reply = QMessageBox.question(
             self, "변환 확인",
             f"{len(checked_ok)}건을 '{self.output_folder}' 폴더로 복사합니다.\n"
-            f"({'평탄화' if flatten else '하위폴더 구조 유지'})\n계속할까요?",
+            f"({'평탄화' if flatten else '하위폴더 구조 유지'}){error_note}\n계속할까요?",
         )
         if reply != QMessageBox.Yes:
             return
 
-        self._set_busy(True, f"변환 중... 0/{len(checked_ok)}")
+        total = len(checked_ok) + len(error_rows)
+        self._set_busy(True, f"변환 중... 0/{total}")
         self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, len(checked_ok))
+        self.progress_bar.setRange(0, total)
         self.progress_bar.setValue(0)
 
-        self._convert_worker = ConvertWorker(self.rows, self.output_folder, flatten)
+        self._convert_worker = ConvertWorker(self.rows, self.output_folder, flatten, copy_errors=True)
         self._convert_worker.progress.connect(self._on_convert_progress)
         self._convert_worker.finished_ok.connect(self._on_convert_finished)
         self._convert_worker.failed.connect(self._on_convert_failed)
@@ -526,7 +575,7 @@ class MainWindow(QMainWindow):
     def _on_convert_progress(self, done: int, total: int):
         self.progress_bar.setRange(0, total)
         self.progress_bar.setValue(done)
-        self.statusBar().showMessage(f"변환 중... {done}/{total}")
+        self.window().statusBar().showMessage(f"변환 중... {done}/{total}")
 
     def _on_convert_finished(self, log: dict):
         self._set_busy(False)
@@ -583,21 +632,38 @@ class MainWindow(QMainWindow):
         """스캔/변환처럼 오래 걸릴 수 있는 작업(QThread) 중에는 충돌 가능한
         조작(폴더/매핑 재선택, 중복 재실행, 되돌리기 등)을 잠가 둔다."""
         for w in (
-            self.btn_select_folder, self.btn_load_barcode_map, self.btn_load_cell_map,
-            self.btn_load_storage_map, self.btn_load_list, self.btn_check_dup,
-            self.btn_select_output, self.btn_convert_all, self.btn_undo_last,
-            self.btn_undo_log, self.radio_flatten, self.radio_preserve,
+            [self.btn_select_folder, self.btn_load_list, self.btn_check_dup,
+             self.btn_select_output, self.btn_convert_all, self.btn_undo_last,
+             self.btn_undo_log, self.radio_flatten, self.radio_preserve]
+            + self._extra_lock_widgets
         ):
             w.setEnabled(not busy)
         if busy:
-            self.statusBar().showMessage(status_message)
+            self.window().statusBar().showMessage(status_message)
         else:
-            self.statusBar().clearMessage()
+            self.window().statusBar().clearMessage()
             # 되돌리기(방금 실행) 버튼은 last_log 가 있을 때만 다시 활성화
             self.btn_undo_last.setEnabled(self.last_log is not None)
 
     def _log(self, message: str):
         self.log_view.appendPlainText(message)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("파일명 변환기")
+        self.resize(1200, 760)
+
+        tabs = QTabWidget()
+        self.setCentralWidget(tabs)
+
+        self.barcode_tab = ConversionTab(BarcodeMaterialController())
+        self.crop_tab = ConversionTab(CropRemapController())
+        tabs.addTab(self.barcode_tab, BarcodeMaterialController.title)
+        tabs.addTab(self.crop_tab, CropRemapController.title)
+
+        self.statusBar()
 
 
 def main():

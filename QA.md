@@ -18,6 +18,7 @@ util별 버그/이슈를 모아보는 인덱스 문서. 상세 기록은 해당 
 | filename_matching | [utils/filename_matching/QA.md](utils/filename_matching/QA.md) | Windows 콘솔 한글 mojibake 수정, GitHub 이슈 #2(파일명 규칙 변경) 대응해 저장번호 매칭 단계 추가 + `barcode_cell_map.csv` 110→247행 확장, 매칭실패 파일 error 폴더 자동 복사, "Crop 이미지 재명명" 탭 추가(2탭 구조로 리팩터링). 이슈 #5(파일명의 저장번호가 실제 셀과 불일치) 대응: 1차로 폴더구조 기반 재명명을 시도했으나 요구사항과 안 맞아 폐기, 파일명↔매핑표 직접 매칭 방식으로 `gui_folder_remap.py` 전면 재작성(gui.py/core.py 비의존 독립 파일). 서브에이전트 검증 7회 통과, 발견된 버그는 모두 배포 전 자체 발견·수정 (2026-07-13) |
 | bmp_folder_counter | [utils/bmp_folder_counter/QA.md](utils/bmp_folder_counter/QA.md) | 아직 기록된 이슈 없음 (서브에이전트 검증 통과, 2026-07-13) |
 | bmp_rename_by_folder | [utils/bmp_rename_by_folder/QA.md](utils/bmp_rename_by_folder/QA.md) | 아직 기록된 이슈 없음 (서브에이전트 검증 통과, 2026-07-13) |
+| bmp_misplaced_sorter | [utils/bmp_misplaced_sorter/QA.md](utils/bmp_misplaced_sorter/QA.md) | 아직 기록된 이슈 없음 (서브에이전트 검증 통과, 2026-07-13, 이슈 #6 매칭표 기반) |
 
 ---
 

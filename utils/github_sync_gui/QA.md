@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-07-13 — robocopy가 잠긴 파일 앞에서 사실상 무한 대기 (강제 취소 버튼 없음)
+
+- **증상**: `DestDir` 안의 파일(예: Excel/텍스트 편집기로 열어둔 csv)이 다른 프로그램에 열려 있으면, "지금 바로 동기화"가 끝나지 않고 오래 멈춰있는 것처럼 보임. GUI 자체는 `QProcess` 비동기 실행이라 멈추지 않지만, 사용자가 이를 중단할 방법이 없었음.
+- **원인**: `Sync-FromGitHub.ps1`의 robocopy 호출에 `/R`(재시도 횟수)·`/W`(재시도 간격) 옵션이 없어 기본값(재시도 100만 회, 간격 30초)이 적용됨. 잠긴 파일이 하나라도 있으면 사실상 끝나지 않는 대기로 이어짐.
+- **해결**:
+  1. `Sync-FromGitHub.ps1`의 robocopy 인자에 `/R:3 /W:10`(재시도 3회, 10초 간격) 추가해 잠긴 파일에 대한 대기 시간 자체를 제한.
+  2. GUI에 "강제 동기화 취소" 버튼 추가 (`on_cancel_sync`). `QProcess.kill()`은 최상위 프로세스(powershell.exe)만 종료하고 그 자식인 robocopy.exe는 고아 프로세스로 남을 수 있어, `taskkill /PID <pid> /T /F`(`/T` = 프로세스 트리 전체)를 `QProcess.startDetached`로 비동기 호출해 powershell+robocopy를 함께 종료하도록 구현.
+- **부수 변경**: 요청에 따라 스케줄 기반 자동 동기화(08:00/12:00/18:00 Windows 작업 스케줄러 등록, GUI의 자동 동기화 토글/트레이 ON-OFF) 기능 전체 삭제. `tools/github_sync/Register-ScheduledTasks.ps1` 파일 삭제, `main.py`에서 관련 코드(`PsRunner`, `on_toggle_schedule`, `_refresh_schedule_state` 등) 제거. "Windows 시작 시 자동 실행"(로그인 시 GUI 자체를 띄우는 기능)은 스케줄 자동 동기화와 별개 기능이라 유지함.
+- **검증**: 서브에이전트가 독립적으로 실제 실행하여 검증 (코드는 건드리지 않고 실행/테스트만 수행), 발견된 버그 없음.
+  - robocopy 재시도 제한: 대상 파일을 다른 프로세스로 잠근 뒤 실제 스크립트와 동일한 옵션(`/E /XD .venv /R:3 /W:10 /NFL /NDL /NJH /NJS /NP`)으로 robocopy 직접 실행 → 1회 시도 + 3회 재시도(10초 간격) 후 `RETRY LIMIT EXCEEDED`(ExitCode=8)로 30.03초 만에 종료됨을 실측 확인 (기본값이면 최대 100만 회 x 30초로 사실상 무한 대기).
+  - 강제 취소: sync 스크립트가 자식 프로세스(robocopy 역할)를 또 실행하는 더미 wrapper .ps1로 `SYNC_SCRIPT`를 대체해 실제 GUI 코드 경로(`on_sync_now` → `on_cancel_sync`)를 이벤트 루프로 구동. `tasklist`로 부모+자식 PID가 실행 중임을 확인한 뒤 취소 → `taskkill /PID <pid> /T /F`가 부모와 모든 자식 프로세스를 함께 종료함을 `tasklist`로 재확인. `finished` 이후 `sync_now_label`이 "취소됨"으로 표시되고(실패/완료와 구분됨), 버튼 상태(`cancel_sync_btn` 비활성화, `sync_now_btn` 재활성화)도 정상 복원됨을 2회 반복 확인.
+  - 잔여 참조: `TASK_NAMES`/`TASK_TIMES`/`MANAGE_SCRIPT`/`PsRunner`/`on_toggle_schedule`/`ICON_OFF`/`Register-ScheduledTasks` 등이 코드/설정에 더 이상 남아있지 않음을 grep으로 확인 (QA.md/processing.md의 변경 이력 서술은 정상).
+  - `build_exe.ps1`: 삭제된 `Register-ScheduledTasks.ps1`을 더 이상 참조하지 않고, 참조 중인 `Sync-FromGitHub.ps1`/`assets\icon_on.ico`가 실제로 존재해 `Test-Path` 검사를 통과함을 확인 (실제 PyInstaller 빌드는 별도 실행하지 않음).
+
 ## 검증 요약 (2026-07-09, 로그 삭제 버튼 + Windows 시작 시 자동 실행 + exe 아이콘 재확인)
 
 직접 실행하여 검증 (서브에이전트는 세션 한도로 중도 실패해 대신 실제 실행으로 확인). 발견된 버그 없음.

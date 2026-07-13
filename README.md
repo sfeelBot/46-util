@@ -108,9 +108,8 @@ Before(원본+드래그 가능한 경계선)/After(실시간 미리보기) 줌/�
 ### github_sync_gui
 
 [tools/github_sync](tools/github_sync/README.md)의 zip 기반 GitHub 동기화 기능을 조작하는 PyQt5 GUI.
-자동 동기화 스케줄(08:00/12:00/18:00) 전체 on/off 토글, 지금 바로 동기화, 마지막 동기화 상태·로그 확인,
-프로젝트 경로(DestDir)/상태 경로(StateDir) 설정을 창 하나에서 처리한다.
-창을 닫아도 시스템 트레이(작업표시줄 알림영역)에 상주하며, 트레이 아이콘 색상(초록=ON/회색=OFF)으로 자동 동기화 상태를 바로 확인할 수 있다.
+지금 바로 동기화(실행 중 강제 취소 가능), 마지막 동기화 상태·로그 확인, 프로젝트 경로(DestDir)/상태 경로(StateDir) 설정을 창 하나에서 처리한다.
+창을 닫아도 시스템 트레이(작업표시줄 알림영역)에 상주한다.
 자세한 내용은 [utils/github_sync_gui/processing.md](utils/github_sync_gui/processing.md) 참고.
 
 ```bash
@@ -121,15 +120,15 @@ Before(원본+드래그 가능한 경계선)/After(실시간 미리보기) 줌/�
 
 1. 처음 실행하면 `%LOCALAPPDATA%\46util-sync\`에 스크립트/설정이 자동 생성된다.
 2. "저장소 설정"/"경로 설정"에서 동기화할 저장소와 프로젝트 폴더(DestDir)를 지정하고 저장한다.
-3. "자동 동기화" 토글로 08:00/12:00/18:00 예약 동기화를 켜고 끈다. "지금 바로 동기화"로 즉시 반영할 수도 있다.
+3. "지금 바로 동기화"로 즉시 반영한다. 대상 폴더의 파일(예: 열려있는 csv)이 다른 프로그램에 잠겨 있어 오래 걸리는 경우 "강제 동기화 취소"로 즉시 중단할 수 있다.
 4. 창을 닫아도(X 버튼) 프로그램은 종료되지 않고 트레이에 상주한다.
    - 트레이 아이콘을 클릭/더블클릭하면 창이 다시 열린다.
-   - 트레이 아이콘을 우클릭하면 "자동 동기화" 토글(체크 표시로 ON/OFF 확인), "지금 동기화", "창 열기", "종료" 메뉴가 나온다.
+   - 트레이 아이콘을 우클릭하면 "지금 동기화", "창 열기", "종료" 메뉴가 나온다.
    - 완전히 끄려면 반드시 트레이 메뉴의 "종료"를 사용한다 (X 버튼은 트레이로 숨기기만 함).
 5. "Windows 시작 시 자동 실행"을 켜면 컴퓨터를 껐다 켜서 로그인할 때 이 프로그램(트레이 상주)이 자동으로 실행된다 (exe로 빌드해서 사용하는 것을 전제로 함).
 6. 로그가 길어지면 "로그 삭제"로 `sync.log`를 지울 수 있다 (동기화 동작/설정에는 영향 없음).
 
-exe로 빌드해서 스케줄 등록용 PowerShell 명령 없이 배포하려면:
+exe로 빌드해서 배포하려면:
 
 ```powershell
 utils\github_sync_gui\build_exe.ps1
@@ -185,16 +184,13 @@ utils\github_sync_gui\build_exe.ps1
 
 ### github_sync
 
-git 접근이 막힌 사내망 PC에서, GitHub 저장소의 새 push 여부를 08:00/12:00/18:00에 자동으로 확인하고
+git 접근이 막힌 사내망 PC에서, GitHub 저장소의 새 push 여부를 확인하고
 변경이 있으면 "Download ZIP"과 동일한 방식(HTTPS zip 다운로드)으로 받아 로컬에 반영하는 PowerShell 스크립트.
 기존 `.venv`는 보존하고, 반영 후 `requirements.txt`로 `pip install`을 자동 실행한다.
-GUI로 스케줄 on/off·상태 확인까지 하고 싶다면 위의 [github_sync_gui](#github_sync_gui) 참고.
+GUI로 조작·상태 확인까지 하고 싶다면 위의 [github_sync_gui](#github_sync_gui) 참고.
 자세한 사용법은 [tools/github_sync/README.md](tools/github_sync/README.md) 참고.
 
 ```powershell
-# 최초 1회: 설정값(대상 경로 등) 수정 후 스케줄 등록
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\github_sync\Register-ScheduledTasks.ps1
-
 # 수동 실행 / 테스트
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\github_sync\Sync-FromGitHub.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\github_sync\Sync-FromGitHub.ps1 -Force

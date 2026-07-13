@@ -8,7 +8,7 @@ import urllib.request
 import winreg
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QObject, QProcess, QThread, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QProcess, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QAction,
@@ -16,7 +16,6 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -25,8 +24,6 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSystemTrayIcon,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -34,13 +31,10 @@ from PyQt5.QtWidgets import (
 OWNER = "sfeelBot"
 REPO = "46-util"
 BRANCH = "main"
-TASK_NAMES = ["46util-GitHubSync-0800", "46util-GitHubSync-1200", "46util-GitHubSync-1800"]
-TASK_TIMES = ["08:00", "12:00", "18:00"]
 
 STABLE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "46util-sync"
 CONFIG_PATH = STABLE_DIR / "config.json"
 SYNC_SCRIPT = STABLE_DIR / "Sync-FromGitHub.ps1"
-MANAGE_SCRIPT = STABLE_DIR / "Register-ScheduledTasks.ps1"
 
 
 def resource_dir() -> Path:
@@ -56,16 +50,14 @@ def asset_dir() -> Path:
 
 
 ICON_ON = asset_dir() / "icon_on.ico"
-ICON_OFF = asset_dir() / "icon_off.ico"
 
 
 def ensure_stable_scripts() -> None:
     STABLE_DIR.mkdir(parents=True, exist_ok=True)
     src_dir = resource_dir()
-    for name in ("Sync-FromGitHub.ps1", "Register-ScheduledTasks.ps1"):
-        src = src_dir / name
-        if src.exists():
-            shutil.copyfile(src, STABLE_DIR / name)
+    src = src_dir / "Sync-FromGitHub.ps1"
+    if src.exists():
+        shutil.copyfile(src, STABLE_DIR / "Sync-FromGitHub.ps1")
 
 
 def default_config() -> dict:
@@ -139,31 +131,6 @@ def set_startup_registered(enabled: bool) -> None:
                 pass
 
 
-class PsRunner(QObject):
-    """powershell.exe -File <script> ...를 QProcess로 비동기 실행한다.
-
-    subprocess.run(...)을 GUI 스레드에서 직접 부르면 프로세스가 끝날 때까지 창이 멈춘다.
-    QProcess는 이벤트 루프 안에서 논블로킹으로 동작하고 finished 시그널로 결과를 알려준다.
-    """
-
-    finished = pyqtSignal(int, str, str)  # exit_code, stdout, stderr
-
-    def __init__(self, args: list, parent=None):
-        super().__init__(parent)
-        self._proc = QProcess(self)
-        self._proc.setProgram("powershell.exe")
-        self._proc.setArguments(["-NoProfile", "-ExecutionPolicy", "Bypass"] + args)
-        self._proc.finished.connect(self._on_finished)
-
-    def start(self) -> None:
-        self._proc.start()
-
-    def _on_finished(self, exit_code: int, _exit_status) -> None:
-        stdout = bytes(self._proc.readAllStandardOutput()).decode("utf-8", errors="replace")
-        stderr = bytes(self._proc.readAllStandardError()).decode("utf-8", errors="replace")
-        self.finished.emit(exit_code, stdout, stderr)
-
-
 class CommitCheckWorker(QThread):
     """GitHub 최신 커밋 조회(urllib, 네트워크 I/O)를 GUI 스레드 밖에서 실행한다."""
 
@@ -200,8 +167,7 @@ class MainWindow(QMainWindow):
         self.cfg = load_config()
 
         self.sync_process: QProcess | None = None
-        self._status_runner: PsRunner | None = None
-        self._toggle_runner: PsRunner | None = None
+        self._sync_cancelled = False
         self._commit_worker: CommitCheckWorker | None = None
 
         self._build_ui()
@@ -215,22 +181,17 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- 트레이 아이콘
     def _build_tray_icon(self) -> None:
-        self.setWindowIcon(QIcon(str(ICON_OFF)))
+        self.setWindowIcon(QIcon(str(ICON_ON)))
 
-        self.tray_action_toggle: QAction | None = None
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self.tray_icon = None
             return
 
-        self.tray_icon = QSystemTrayIcon(QIcon(str(ICON_OFF)), self)
-        self.tray_icon.setToolTip("46 util - GitHub 동기화\n자동 동기화: 확인 중...")
+        self.tray_icon = QSystemTrayIcon(QIcon(str(ICON_ON)), self)
+        self.tray_icon.setToolTip("46 util - GitHub 동기화")
         self.tray_icon.activated.connect(self._on_tray_activated)
 
         menu = QMenu()
-        self.tray_action_toggle = QAction("자동 동기화: 확인 중...", self, checkable=True)
-        self.tray_action_toggle.triggered.connect(self.on_toggle_schedule)
-        menu.addAction(self.tray_action_toggle)
-
         action_sync = QAction("지금 동기화", self)
         action_sync.triggered.connect(self.on_sync_now)
         menu.addAction(action_sync)
@@ -261,19 +222,6 @@ class MainWindow(QMainWindow):
             self.tray_icon.hide()
         QApplication.instance().quit()
 
-    def _update_tray_status(self, all_on: bool) -> None:
-        icon = QIcon(str(ICON_ON if all_on else ICON_OFF))
-        status_text = "ON" if all_on else "OFF"
-        self.setWindowIcon(icon)
-        if self.tray_icon is not None:
-            self.tray_icon.setIcon(icon)
-            self.tray_icon.setToolTip(f"46 util - GitHub 동기화\n자동 동기화: {status_text}")
-        if self.tray_action_toggle is not None:
-            self.tray_action_toggle.blockSignals(True)
-            self.tray_action_toggle.setChecked(all_on)
-            self.tray_action_toggle.setText(f"자동 동기화: {status_text}")
-            self.tray_action_toggle.blockSignals(False)
-
     def closeEvent(self, event) -> None:
         if self.tray_icon is None:
             super().closeEvent(event)
@@ -295,7 +243,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_repo_group())
         layout.addWidget(self._build_path_group())
         layout.addWidget(self._build_startup_group())
-        layout.addWidget(self._build_schedule_group())
         layout.addWidget(self._build_manual_group())
         layout.addWidget(self._build_status_group())
         layout.addWidget(self._build_log_group())
@@ -374,34 +321,16 @@ class MainWindow(QMainWindow):
         vbox.addWidget(hint)
         return box
 
-    def _build_schedule_group(self) -> QGroupBox:
-        box = QGroupBox("자동 동기화 스케줄 (매일 08:00 / 12:00 / 18:00)")
-        vbox = QVBoxLayout(box)
-
-        self.toggle_btn = QPushButton("자동 동기화: 확인 중...")
-        self.toggle_btn.setCheckable(True)
-        self.toggle_btn.clicked.connect(self.on_toggle_schedule)
-        vbox.addWidget(self.toggle_btn)
-
-        self.schedule_table = QTableWidget(3, 3)
-        self.schedule_table.setHorizontalHeaderLabels(["시각", "마지막 실행", "결과"])
-        self.schedule_table.verticalHeader().setVisible(False)
-        self.schedule_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.schedule_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        for row, t in enumerate(TASK_TIMES):
-            self.schedule_table.setItem(row, 0, QTableWidgetItem(t))
-            self.schedule_table.setItem(row, 1, QTableWidgetItem("-"))
-            self.schedule_table.setItem(row, 2, QTableWidgetItem("-"))
-        vbox.addWidget(self.schedule_table)
-
-        return box
-
     def _build_manual_group(self) -> QGroupBox:
         box = QGroupBox("수동 동기화")
         row = QHBoxLayout(box)
         self.sync_now_btn = QPushButton("지금 바로 동기화")
         self.sync_now_btn.clicked.connect(self.on_sync_now)
         row.addWidget(self.sync_now_btn)
+        self.cancel_sync_btn = QPushButton("강제 동기화 취소")
+        self.cancel_sync_btn.setEnabled(False)
+        self.cancel_sync_btn.clicked.connect(self.on_cancel_sync)
+        row.addWidget(self.cancel_sync_btn)
         self.sync_now_label = QLabel("")
         row.addWidget(self.sync_now_label)
         row.addStretch()
@@ -489,28 +418,12 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "저장됨", "경로 설정을 저장했습니다.")
         self.refresh_status()
 
-    def on_toggle_schedule(self, checked: bool) -> None:
-        if self._toggle_runner is not None:
-            return
-        self.toggle_btn.setEnabled(False)
-        action = "Register" if checked else "DisableAll"
-        runner = PsRunner(["-File", str(MANAGE_SCRIPT), "-Action", action], self)
-        runner.finished.connect(self._on_toggle_finished)
-        runner.finished.connect(runner.deleteLater)
-        self._toggle_runner = runner
-        runner.start()
-
-    def _on_toggle_finished(self, exit_code: int, _stdout: str, stderr: str) -> None:
-        self._toggle_runner = None
-        if exit_code != 0:
-            QMessageBox.warning(self, "실패", f"스케줄 변경에 실패했습니다.\n\n{stderr}")
-        self.toggle_btn.setEnabled(True)
-        self.refresh_status()
-
     def on_sync_now(self) -> None:
         if self.sync_process is not None:
             return
+        self._sync_cancelled = False
         self.sync_now_btn.setEnabled(False)
+        self.cancel_sync_btn.setEnabled(True)
         self.sync_now_label.setText("실행 중...")
         self.log_view.clear()
 
@@ -534,9 +447,25 @@ class MainWindow(QMainWindow):
     def on_sync_finished(self, exit_code: int, _exit_status) -> None:
         self.sync_process = None
         self.sync_now_btn.setEnabled(True)
-        self.sync_now_label.setText("완료" if exit_code == 0 else f"실패 (code={exit_code})")
+        self.cancel_sync_btn.setEnabled(False)
+        if self._sync_cancelled:
+            self.sync_now_label.setText("취소됨")
+        else:
+            self.sync_now_label.setText("완료" if exit_code == 0 else f"실패 (code={exit_code})")
         self.refresh_status()
         self.refresh_log()
+
+    def on_cancel_sync(self) -> None:
+        """QProcess.kill()은 powershell.exe만 종료하고 그 자식인 robocopy.exe는
+        고아 프로세스로 남아 재시도를 계속할 수 있으므로, taskkill /T로 프로세스 트리 전체를 종료한다."""
+        if self.sync_process is None:
+            return
+        pid = self.sync_process.processId()
+        self._sync_cancelled = True
+        self.cancel_sync_btn.setEnabled(False)
+        self.sync_now_label.setText("취소 중...")
+        if pid:
+            QProcess.startDetached("taskkill", ["/PID", str(pid), "/T", "/F"])
 
     def refresh_status(self) -> None:
         state_dir = Path(self.cfg.get("StateDir", ""))
@@ -553,40 +482,6 @@ class MainWindow(QMainWindow):
             self.last_sync_label.setText("마지막 동기화 시각: -")
 
         self.refresh_log()
-        self._refresh_schedule_state()
-
-    def _refresh_schedule_state(self) -> None:
-        if self._status_runner is not None:
-            return  # 이전 조회가 아직 진행 중이면 이번 틱은 건너뜀 (중복 프로세스 방지)
-        runner = PsRunner(["-File", str(MANAGE_SCRIPT), "-Action", "Status"], self)
-        runner.finished.connect(self._on_schedule_status_result)
-        runner.finished.connect(runner.deleteLater)
-        self._status_runner = runner
-        runner.start()
-
-    def _on_schedule_status_result(self, _exit_code: int, stdout: str, _stderr: str) -> None:
-        self._status_runner = None
-        try:
-            items = json.loads(stdout) if stdout.strip() else []
-        except Exception:
-            items = []
-
-        by_name = {item["Name"]: item for item in items}
-        all_on = bool(items) and all(item.get("Exists") and item.get("Enabled") for item in items)
-
-        self.toggle_btn.blockSignals(True)
-        self.toggle_btn.setChecked(all_on)
-        self.toggle_btn.setText(f"자동 동기화: {'ON' if all_on else 'OFF'}")
-        self.toggle_btn.blockSignals(False)
-        self._update_tray_status(all_on)
-
-        for row, name in enumerate(TASK_NAMES):
-            item = by_name.get(name, {})
-            last_run = item.get("LastRunTime") or "-"
-            result_code = item.get("LastResult")
-            result_text = "-" if result_code is None else str(result_code)
-            self.schedule_table.setItem(row, 1, QTableWidgetItem(str(last_run)))
-            self.schedule_table.setItem(row, 2, QTableWidgetItem(result_text))
 
     def refresh_log(self) -> None:
         state_dir = Path(self.cfg.get("StateDir", ""))

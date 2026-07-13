@@ -51,6 +51,24 @@ FILES = {
     # 매칭 실패: image_cropper 출력 형식(_{idx}_x..y..w..h..)이 아님
     "cropped/0_Test#A4-0000004-1-000-1_Insp_960_5_x0y0w100h100.raw": b"crop-invalid-2",
     # 매칭 실패: ROI 번호 5 는 1~4 범위 밖
+    # ===== folder_crop_remap(그룹폴더 기반 Crop 재명명) 테스트용: GitHub 이슈 #5 =====
+    # 베이스 파일명에 박힌 Test#A9-9999999 는 일부러 "틀린" 값 (실제로는 폴더 구조를 신뢰해야 함)
+    "group_test/A2_매칭(4셀 이미지)/01/cropped/0_Test#A9-9999999-1-000-1_Insp_961_1_x0y0w100h100.raw": b"g1-1",
+    # 그룹 1 -> 셀 인덱스 1 -> No=1 -> A열저장번호 Test#A1-0000001 로 치환
+    "group_test/A2_매칭(4셀 이미지)/01/cropped/0_Test#A9-9999999-1-000-1_Insp_961_2_x100y0w100h100.raw": b"g1-2",
+    # 그룹 1, crop2 -> 셀 인덱스 2 -> Test#A2-0000002
+    "group_test/A2_매칭(4셀 이미지)/01/cropped/0_Test#A9-9999999-1-000-1_Insp_961_3_x0y100w100h100.raw": b"g1-3",
+    # 그룹 1, crop3 -> 셀 인덱스 3 -> Test#A3-0000003
+    "group_test/A2_매칭(4셀 이미지)/01/cropped/0_Test#A9-9999999-1-000-1_Insp_961_4_x100y100w100h100.raw": b"g1-4",
+    # 그룹 1, crop4 -> 셀 인덱스 4 -> Test#A4-0000004
+    "group_test/A1_매칭(4셀 이미지)/02/cropped/0_Test#A9-9999999-1-000-1_Insp_962_1_x0y0w100h100.raw": b"g2-1",
+    # 그룹 2(짝수, A1_매칭 하위), crop1 -> 셀 인덱스 5 -> Test#A5-0000005
+    "group_test/A2_매칭(4셀 이미지)/35 (스크랩無)/cropped/0_Test#A9-9999999-1-000-1_Insp_963_1_x0y0w100h100.raw": b"g35-1",
+    # 그룹 35(폴더명에 괄호 텍스트 포함), crop1 -> 셀 인덱스 4*34+1=137 -> Test#A1-0000137
+    "group_test/misc/cropped/0_Test#A9-9999999-1-000-1_Insp_964_1_x0y0w100h100.raw": b"invalid-group",
+    # 매칭 실패: 그룹폴더명("misc")에서 숫자를 찾을 수 없음
+    "group_test/A1_매칭(4셀 이미지)/9999/cropped/0_Test#A9-9999999-1-000-1_Insp_965_1_x0y0w100h100.raw": b"out-of-range",
+    # 매칭 실패: 셀 인덱스(4*9998+1=39993)가 매핑표(No)에 없음
 }
 
 for rel_path, content in FILES.items():

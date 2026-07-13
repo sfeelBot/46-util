@@ -137,9 +137,10 @@ utils\github_sync_gui\build_exe.ps1
 
 ### filename_matching
 
-이물검사 이미지 파일명을 재가공하는 PyQt5 GUI 도구, 탭 2개로 구성된다.
+이물검사 이미지 파일명을 재가공하는 PyQt5 GUI 도구 모음. 메인 GUI(`gui.py`)는 탭 2개로 구성되고, 별도로 독립 실행되는 GUI가 하나 더 있다.
 **탭1 "바코드 → 재료명 변환"**: 기존에 따로 실행하던 `barcode_to_cellNum.py`(바코드→셀번호) → `cellNum_to_barcode.py`(셀번호→재료명) 2단계를 하나의 파이프라인으로 묶고, 폴더 재귀 스캔·확장자 필터·최종 변환명 미리보기·중복검사·우클릭 탐색기 열기·일괄 변환·되돌리기까지 GUI에서 처리한다. 구형 파일명(`YYYY-MM-DD-바코드-...`)과 신형 파일명(저장번호 `Test#A8-0000008` 포함) 둘 다 지원하며, 매칭실패 파일은 `error/` 폴더에 원본 이름 그대로 자동 백업된다.
 **탭2 "Crop 이미지 재명명"**: `image_cropper`로 4등분한 crop 이미지를, 원래 개별 촬영이었다면 가졌을 저장번호 기반 파일명으로 되돌린다. 결과를 탭1에 다시 입력하면 바코드→재료명 변환까지 이어갈 수 있다.
+**`gui_folder_remap.py`(별도 실행)**: crop 파일명에 박힌 저장번호를 신뢰할 수 없을 때(파일명이 실제 셀 위치와 어긋나는 경우) 대신 폴더 구조(`{그룹번호}/cropped/`)로 각 crop이 어느 셀인지 판단해 재명명한다.
 자세한 내용은 [utils/filename_matching/processing.md](utils/filename_matching/processing.md) 참고.
 
 ```bash
@@ -166,6 +167,17 @@ utils\github_sync_gui\build_exe.ps1
    - 오름차순(체크 시): crop 1~4 → `Test#A1-0000001`/`Test#A2-0000002`/`Test#A3-0000003`/`Test#A4-0000004` (crop4는 시리얼 유지, crop1~3은 시리얼 3~1 감소)
    - lane은 두 경우 모두 1~8 순환 규칙으로 재계산
 4. 이후 중복검사/우클릭 탐색기/출력 폴더·모드/모두 변환/되돌리기는 탭1과 동일하게 동작
+
+**사용법 (`gui_folder_remap.py`: 그룹폴더 기반 Crop 재명명)**
+
+```bash
+.venv\Scripts\python.exe utils\filename_matching\gui_folder_remap.py
+```
+
+1. 대상 폴더는 `{그룹번호}/cropped/{crop파일}` 구조여야 함 (예: `A1_매칭(4셀 이미지)/02/cropped/...`, 상위에 분류 폴더가 몇 겹 있어도 무방)
+2. 시작 시 `mapping/storage_ab_defect_info.csv`가 기본 매핑으로 로드됨
+3. 확장자 선택 후 "목록 불러오기" — 그룹번호 N(폴더명 앞자리 숫자, "02"→2, "35 (스크랩無)"→35)과 cropped 폴더 안 crop 순서(1~4, 오름차순)로 셀 인덱스([4N-3, 4N])를 계산하고, 매핑표에서 조회한 올바른 A열 저장번호로 베이스 파일명의 (틀렸을 수 있는) 기존 저장번호를 치환. 그룹번호를 못 찾거나 매핑표에 없으면 "매칭실패"
+4. 이후 흐름은 탭1/탭2와 동일
 
 ## 도구 (tools/)
 

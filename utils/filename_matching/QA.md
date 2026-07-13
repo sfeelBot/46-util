@@ -14,6 +14,8 @@
 | 2026-07-12 | 해결 | `QTableWidget.itemChanged`가 `_refresh_table()` 안에서 스캔할 때마다 재연결되어 중복 signal 연결 발생 가능성 (기능상 눈에 띄는 버그로 드러나기 전에 리팩터링 중 발견·수정) |
 | 2026-07-12 | 해결 | 매칭실패 파일이 변환 결과에서 그냥 사라져 어떤 파일이 왜 실패했는지 추적하기 어려움 → error 폴더 자동 복사 추가 |
 | 2026-07-12 | 해결 | 2탭 리팩터링 중, 탭별 추가 UI(매핑 선택 버튼)가 `self.log_view` 생성 전에 로그를 기록하려다 `AttributeError` 발생할 뻔함 → UI 빌드와 초기 데이터 로드 시점 분리로 해결 (배포 전 구현 중 발견) |
+| 2026-07-12 | 해결 | crop 파일명에 박힌 저장번호가 실제 셀 위치와 어긋남(GitHub 이슈 #5) → 파일명 대신 폴더 구조(그룹번호) 기반으로 재계산하는 별도 GUI(`gui_folder_remap.py`) 추가 |
+| 2026-07-12 | 해결 | `storage_ab_defect_info.csv`에서 barcode 매칭 실패한 4행의 `cell` 값이 빈 문자열로 저장되어 있어 의도된 결측인지 파싱 오류인지 구분하기 어려움 → `NULL` 문자열로 명시 |
 
 ---
 
@@ -54,6 +56,19 @@
 - 해결 방법: `core.convert_files()`/`core.check_conflicts()`에 `copy_errors`(기본 True) 옵션 추가. 매칭실패(`STATUS_NO_MATCH`) 행은 체크 여부와 무관하게 `{출력폴더}/error/`(구조유지 모드면 `error/하위폴더/`)에 원본 파일명 그대로 함께 복사되고, 같은 변환 로그에 포함되어 "되돌리기"로도 함께 원복됨. error 폴더 안에서의 이름 충돌도 정상 변환과 동일하게 사전 충돌검사에 포함됨.
 - 상태: 해결
 
+### [2026-07-12] crop 파일명의 저장번호가 실제 셀 위치와 불일치 (GitHub 이슈 #5)
+
+- 증상: [이슈 #5](https://github.com/sfeelBot/46-util/issues/5) 보고 — "본문에는 새로 매칭한 데이터들이 있어 A열 데이터들이 맞지 않아서 다시 확인한거야." crop 이미지 파일명에 박혀있는 저장번호(`Test#A..`)가 실제 셀 위치와 어긋남.
+- 확인: 이슈 본문의 152행 표(No/Cell Barcode/A/B저장번호)를 기존 `storage_ab_defect_info.csv`와 대조한 결과 값 차이 0건 — 매핑 데이터 자체는 문제없고, crop 파일명 안의 저장번호를 신뢰할 수 없다는 것이 실제 원인.
+- 해결 방법: 이슈 댓글의 실제 폴더 구조(`{그룹번호}/cropped/{crop파일}`, 그룹 N → 셀 인덱스 [4N-3,4N])를 근거로 `folder_crop_remap.py`를 새로 작성. crop 파일명의 저장번호는 무시하고, 그룹폴더 번호 + crop 순서(오름차순)로 셀 인덱스를 계산해 `storage_ab_defect_info.csv`(No 컬럼)에서 올바른 A열 저장번호를 조회, 베이스 파일명의 (틀린) 저장번호 자리에 치환. 별도 실행 GUI `gui_folder_remap.py`(gui.py의 `ConversionTab` 재사용)로 제공.
+- 상태: 해결
+
+### [2026-07-12] storage_ab_defect_info.csv의 결측 cell 값이 빈 문자열
+
+- 증상: barcode_cell_map.csv에 없는 바코드 4건(No 32/71/136/139)의 `cell` 컬럼이 빈 문자열로 저장되어 있어, CSV를 열었을 때 의도된 결측인지 데이터 누락 사고인지 구분이 안 됨.
+- 해결 방법: 해당 4행의 `cell` 값을 리터럴 문자열 `NULL`로 명시. 다른 컬럼/행은 변경 없음 (git diff로 4줄만 바뀐 것 확인).
+- 상태: 해결
+
 ### [2026-07-12] 2탭 리팩터링 중 위젯 초기화 순서 버그 (배포 전 발견)
 
 - 증상(구현 중 자체 발견, 실사용 보고 없음): `BarcodeMaterialController.build_extra_ui()`가 매핑 로드를 수행하며 `tab._log()`를 호출하는데, 이 시점에 `ConversionTab._build_ui()`가 아직 `self.log_view`를 만들기 전이라 `AttributeError`로 앱이 뜨지 않을 뻔함.
@@ -62,6 +77,16 @@
 - 상태: 해결
 
 ---
+
+## 검증 요약 (2026-07-12, 그룹폴더 기반 Crop 재명명 — GitHub 이슈 #5)
+
+서브에이전트 검증 통과, 발견된 버그 없음.
+
+- **extract_group_number**: `/`, `\` 구분자 모두 정상 처리. 앞자리 0(`"02"`→2), 뒤 텍스트 포함 폴더명(`"35 (스크랩無)"`→35) 정확히 파싱. 숫자로 시작 안 하는 폴더(`misc`), `cropped`로 안 끝나는 경로, 너무 짧은 경로는 모두 None(그룹번호 못 찾음) 처리 확인.
+- **compute_remapped_filename**: 그룹1(셀1~4)/그룹2(짝수, 셀5)/그룹35(홀수, 셀137, `storage_ab_defect_info.csv` No=137 대조 일치) 모두 베이스 파일명 안의 (틀린) 저장번호가 정확한 값으로 치환되고 나머지 파일명(날짜/타임스탬프 등)은 그대로 유지됨을 문자열 단위로 확인. 그룹폴더명에 숫자가 없는 경우/계산된 셀 인덱스가 매핑표에 없는 경우(그룹9999→셀39993) 각각 정확한 사유로 매칭실패. 베이스 파일명에 저장번호 패턴이 아예 없는 합성 케이스에서 "값을 앞에 붙이는" 폴백 동작도 확인.
+- **전체 파이프라인**: `build_rows`가 8개 행(성공 6 + 실패 2) 반환, `checked`가 성공 행에만 True. `check_conflicts`/`convert_files`/`save_log`/`undo_log`까지 실제 실행해 파일이 정확한 이름으로 복사되고 원본은 그대로 보존됨을 바이트 단위로 확인.
+- **gui_folder_remap.py**: `QT_QPA_PLATFORM=offscreen`에서 `MainWindow` 생성 확인, `gui.py`의 `ConversionTab`을 독립적으로 재사용해도(2탭 구조가 아닌 단일 창) 위젯 초기화 순서 문제 없이 매핑 로드 로그가 정상적으로 쌓임을 확인.
+- **storage_ab_defect_info.csv NULL 처리**: barcode 매칭 실패 4행(No 32/71/136/139)의 `cell` 값을 `NULL` 문자열로 변경. git diff로 해당 4줄만 바뀌었음을 확인, `folder_crop_remap.load_ab_map`은 `cell` 컬럼을 읽지 않으므로 이 변경으로 인한 영향 없음.
 
 ## 검증 요약 (2026-07-12, Crop 재명명 탭 + error 폴더 + 2탭 리팩터링)
 

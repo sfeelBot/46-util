@@ -6,7 +6,7 @@
 
 - **탭 1 "바코드 → 재료명 변환"**: 원래 `barcode_to_cellNum.py`(바코드→셀번호) → `cellNum_to_barcode.py`(셀번호→재료명) 두 단계를 순서대로 따로 실행해야 했는데, 이 두 단계를 하나의 파이프라인으로 묶고 GUI로 미리보기/중복검사/일괄 변환/되돌리기까지 할 수 있게 만들었다.
 - **탭 2 "Crop 이미지 재명명"**: 하나의 원본 이미지 안에 물리적으로 4개 셀이 찍혀 있어 `image_cropper` util로 4등분 crop한 경우, crop 순서(1~4)를 이용해 각 조각이 원래 개별 촬영이었다면 가졌을 저장번호 기반 파일명으로 되돌린다. 그 결과를 탭 1에 다시 입력하면 바코드→재료명 변환까지 이어갈 수 있다.
-- **`gui_folder_remap.py` (별도 실행 GUI, "그룹폴더 기반 Crop 재명명")**: 탭 2와 비슷하지만, crop 파일명에 박힌 저장번호를 신뢰하지 않고 대신 **폴더 구조**(`{그룹번호}/cropped/`)로 각 crop이 어느 셀인지 판단한다. GitHub 이슈 #5 대응(파일명에 박힌 A열 저장번호가 실제 셀 위치와 어긋나는 문제).
+- **`gui_folder_remap.py` (별도 실행 GUI, "이슈#5 매핑표 기반 파일명 재명명")**: `gui.py`/`core.py`와 완전히 독립적인 파일. 파일명 어딘가의 저장번호(`Test#A../Test#B..`)를 `storage_ab_defect_info.csv`(GitHub 이슈 #5 데이터)에서 직접 조회해 셀번호+이물정보를 얻고 `{이물정보}_{셀번호}_{원본파일명}`으로 재명명한다. 셀번호를 모르는 행(`cell=NULL`)도 이물정보만으로 정상 변환된다. 폴더 구조나 crop 순서는 전혀 보지 않는다.
 
 ## 구성 파일
 
@@ -15,12 +15,11 @@
 | `gui.py` | PyQt5 GUI 메인 (실행 진입점). `ConversionTab`(공용 UI/워크플로) + `BarcodeMaterialController`/`CropRemapController`(탭별 로직) + `QTabWidget` 호스트(`MainWindow`)로 구성 |
 | `core.py` | GUI 비의존 핵심 로직 (스캔/매핑/변환명 계산/중복검사/변환/되돌리기, error 폴더 복사 포함) — 단위 테스트·서브에이전트 검증 대상 |
 | `crop_remap.py` | GUI 비의존 crop 재명명 로직 (`core.FileRow`를 재사용해 `core.py`의 중복검사/변환/되돌리기를 그대로 공유) |
-| `folder_crop_remap.py` | GUI 비의존, 폴더 구조(그룹번호) 기반 crop 재명명 로직. `crop_remap.py`의 정규식(`CROP_SUFFIX_RE`/`STORAGE_RE`)을 재사용하되 계산 방식은 다름 (아래 "그룹폴더 기반 Crop 재명명 규칙" 참고) |
-| `gui_folder_remap.py` | **별도 실행 GUI** (`gui.py`의 탭이 아님). `gui.py`의 `ConversionTab`을 그대로 import해 재사용하고, `FolderGroupController`만 새로 정의 |
+| `gui_folder_remap.py` | **완전히 독립적인 별도 실행 GUI** (`gui.py`의 탭이 아니고, `gui.py`/`core.py`/`crop_remap.py`를 import하지 않음 — 스캔/변환/되돌리기 로직을 이 파일 안에 자체적으로 재구현). 파일명의 저장번호를 `storage_ab_defect_info.csv`와 직접 매칭 |
 | `mapping/barcode_cell_map.csv` | 바코드 ↔ 셀번호 매핑 (컬럼: `barcode,cell`) |
 | `mapping/cell_material_map.csv` | 셀번호 ↔ 재료명 매핑 (컬럼: `cell,material`) |
 | `mapping/storage_cellbarcode_map.csv` | 저장번호 ↔ Cell Barcode 매핑 (컬럼: `storage_number,cell_barcode`). 신형 파일명(`Test#A8-0000008` 포함) 매칭에 사용 |
-| `mapping/storage_ab_defect_info.csv` | 셀 인덱스(`No`) ↔ A/B열 저장번호·이물정보 매핑 (GitHub 이슈 #3/#4 데이터 결합). `gui_folder_remap.py`가 사용 |
+| `mapping/storage_ab_defect_info.csv` | 셀 인덱스(`No`) ↔ A/B열 저장번호·셀번호·이물정보 매핑 (GitHub 이슈 #3/#4/#5 데이터 결합). `gui_folder_remap.py`의 유일한 데이터 소스 |
 | `mapping/unified_map.csv` | 저장번호→Cell Barcode→바코드→셀→재료명을 미리 조인해둔 참고용 통합 테이블 (셀번호순 정렬). 코드에서 직접 로드하지는 않음, 사람이 확인용 |
 | `barcode_to_cellNum.py` | (레거시, 독립 실행용) 바코드→셀번호 1단계만 수행하던 원본 스크립트. 하드코딩된 경로/매핑 사용 |
 | `cellNum_to_barcode.py` | (레거시, 독립 실행용) 셀번호→재료명 2단계만 수행하던 원본 스크립트. 하드코딩된 경로/매핑 사용 |
@@ -56,18 +55,19 @@
 3. 확장자 선택 후 "목록 불러오기" — 각 crop 파일명에서 ROI번호(1~4)와 원본 저장번호를 읽어 재명명 결과를 미리보기로 계산. image_cropper 출력 형식이 아니거나 ROI번호가 1~4 밖이거나 저장번호 패턴이 없으면 "매칭실패"
 4. 이후 흐름(중복검사/우클릭 탐색기/테이블 조작/출력 폴더·모드/모두 변환/되돌리기)은 탭 1과 동일
 
-### gui_folder_remap.py: 그룹폴더 기반 Crop 재명명 (별도 실행)
+### gui_folder_remap.py: 이슈#5 매핑표 기반 파일명 재명명 (별도 실행, 독립)
 
 ```
 .venv\Scripts\python.exe utils/filename_matching/gui_folder_remap.py
 ```
 
-crop 파일명에 박힌 저장번호를 신뢰할 수 없을 때(GitHub 이슈 #5) 쓰는 도구. 사용법은 탭 2와 거의 같지만:
+파일명에 저장번호(`Test#A../Test#B..`)만 들어있으면 폴더 구조나 crop 순서와 무관하게 바로 재명명할 수 있는 도구.
 
-1. 대상 폴더는 `{그룹번호}/cropped/{crop파일}` 구조여야 함 (예: `A1_매칭(4셀 이미지)/02/cropped/...`). 상위에 A1_매칭/A2_매칭 같은 분류 폴더가 몇 겹 있어도 상관없음 — 재귀 스캔 시 각 파일 바로 위 두 단계(`{그룹번호}/cropped`)만 본다
+1. 대상 폴더 선택 (하위 폴더 재귀 스캔, 구조에 제약 없음)
 2. 시작 시 `mapping/storage_ab_defect_info.csv`가 기본으로 로드됨 (다른 매핑 CSV로 교체 가능)
-3. 확장자 선택 후 "목록 불러오기" — 그룹번호와 crop 순서로 셀 인덱스를 계산해 매핑표에서 올바른 A열 저장번호를 조회하고, 그 값으로 재명명한 결과를 미리보기로 보여줌. 그룹번호를 못 찾거나(`cropped` 폴더 바로 위가 숫자가 아님), image_cropper 형식이 아니거나, 계산된 셀 인덱스가 매핑표에 없으면 "매칭실패"
-4. 이후 흐름은 탭 1/탭 2와 동일
+3. 확장자 선택 후 "목록 불러오기" — 각 파일명에서 `Test#A../Test#B..` 패턴을 찾아 매핑표에서 셀번호+이물정보를 조회하고 `{이물정보}_{셀번호}_{원본파일명}`으로 재명명 결과를 미리보기로 보여줌. 파일명에 패턴이 없거나 그 값이 매핑표에 없으면 "매칭실패"
+4. 셀번호가 `NULL`인 행(바코드 매칭 실패로 셀을 모르는 경우)도 매칭실패로 치지 않고, 이물정보만으로 정상 변환됨 (파일명의 셀번호 자리에는 문자열 `NULL`이 그대로 들어감)
+5. 이후 흐름(중복검사/우클릭 탐색기/테이블 조작/출력 폴더·모드/모두 변환/되돌리기)은 탭 1/탭 2와 동일한 방식으로 동작하지만, 이 파일 안에서 독립적으로 구현되어 있다 (error 폴더 자동 백업 기능은 없음 — 매칭실패는 단순히 변환 대상에서 제외됨)
 
 ## 파일명 매칭 규칙 (탭 1)
 
@@ -91,14 +91,15 @@ crop 파일명에 박힌 저장번호를 신뢰할 수 없을 때(GitHub 이슈 
 - lane 번호(A/B 뒤의 숫자)는 `storage_cellbarcode_map.csv`와 동일한 1~8 순환 규칙(`((시리얼-1) % 8) + 1`)으로 새로 계산 (단순히 base 파일의 lane을 그대로 감소시키지 않음)
 - 재명명 결과 = crop 접미사(`_{ROI번호}_x..y..w..h..`)를 제거하고 저장번호만 교체한 파일명
 
-## 그룹폴더 기반 Crop 재명명 규칙 (`gui_folder_remap.py`)
+## 이슈#5 매핑표 기반 재명명 규칙 (`gui_folder_remap.py`)
 
-탭 2와 달리 **베이스 파일명에 박힌 저장번호는 신뢰하지 않는다** (GitHub 이슈 #5: 실제 셀 위치와 어긋나는 사례 발견). 대신:
+가장 처음 시도했던 방식(폴더 구조/그룹번호로 셀 위치를 역산하는 방식)은 실제로 맞지 않아 폐기하고, 파일명과 매핑표만으로 직접 매칭하는 훨씬 단순한 방식으로 다시 만들었다:
 
-- 폴더 구조 `{그룹번호}/cropped/{crop파일}`에서 그룹번호 N을 읽음 (`folder_crop_remap.extract_group_number`). 폴더명 앞자리 숫자만 읽으므로 `"02"`(0 무시) → 2, `"35 (스크랩無)"`(뒤 텍스트 무시) → 35 처럼 처리됨
-- 그룹 N은 셀 인덱스 `[4N-3, 4N-2, 4N-1, 4N]` 4개를 담고, cropped 폴더의 crop 1~4가 **오름차순**으로 이 4개에 배정됨(crop1→4N-3 … crop4→4N) — 탭 2의 "오름차순" 옵션과 동일한 방향, 항상 이 방향만 사용(옵션 없음)
-- 계산된 셀 인덱스로 `storage_ab_defect_info.csv`의 `No` 컬럼을 조회해 올바른 `A열_저장번호`를 가져옴
-- crop 접미사를 제거한 베이스 파일명 안에서 (틀렸을 수 있는) 기존 `Test#[AB]..` 패턴을 찾아 그 값으로 치환 (패턴이 아예 없으면 앞에 붙임) — 나머지 파일명(날짜/타임스탬프 등)은 그대로 유지됨
+- 파일명 어딘가에서 정규식 `Test#[AB]\d+-\d+` 로 저장번호를 찾음 (예: `Test#A1-0000001`)
+- 그 값을 `storage_ab_defect_info.csv`의 `A열_저장번호` 또는 `B열_저장번호` 컬럼에서 찾아 같은 행의 `cell`(셀번호)과 매칭된 쪽의 이물정보(`A열_이물정보` 또는 `B열_이물정보`)를 가져옴
+- 최종 파일명: `{이물정보}_{셀번호}_{원본파일명}` (이물정보의 `/`는 파일명에 못 쓰므로 `_`로 치환)
+- `cell`이 `NULL`인 행(바코드가 `barcode_cell_map.csv`에 없어 셀을 모르는 4개 행)도 실패로 치지 않음 — 이물정보만 써서 정상 변환하고 셀번호 자리에는 `NULL` 문자열이 그대로 들어감
+- 파일명에서 저장번호 패턴 자체를 못 찾거나, 그 값이 매핑표에 아예 없으면(둘 다 실제로 존재하지 않는 경우) "매칭실패"
 
 ## 비동기 처리 (GUI 응답성)
 
@@ -116,17 +117,17 @@ crop 파일명에 박힌 저장번호를 신뢰할 수 없을 때(GitHub 이슈 
 - `barcode_cell_map.csv`(247행): 원래 `barcode_to_cellNum.py`의 하드코딩 매핑(110행)에서 시작해, [GitHub 이슈 #2](https://github.com/sfeelBot/46-util/issues/2)와 그 댓글에서 사용자가 제공한 표를 병합해 137행을 추가함(총 247행). 병합 시 두 표 사이에 실제 값 충돌은 없었고, "바코드 인식 안됨"/"Cell 없음"/빈 값으로 표시된 셀은 매핑에서 제외함.
 - `storage_cellbarcode_map.csv`(304행): GitHub 이슈 #2 본문에 첨부된 152개 셀(A/B 저장번호 각각) 표에서 생성.
 - `cell_material_map.csv`(239행): `cellNum_to_barcode.py`의 하드코딩 매핑에서 그대로 생성, 아직 갱신 안 됨.
-- `storage_ab_defect_info.csv`(152행): GitHub 이슈 #4의 Cell Barcode/A/B 저장번호 표와 이슈 #3의 셀별 이물 데이터(재질/이물형상/사이즈/이물위치)를 `barcode_cell_map.csv`로 조인해 생성. A/B는 물리적으로 같은 셀을 가리키므로 이물정보를 공유. 이슈 #2 본문 데이터와 대조 결과 값 차이 없음(순수 조인).
+- `storage_ab_defect_info.csv`(152행): GitHub 이슈 #4의 Cell Barcode/A/B 저장번호 표와 이슈 #3의 셀별 이물 데이터(재질/이물형상/사이즈/이물위치)를 `barcode_cell_map.csv`로 조인해 생성. A/B는 물리적으로 같은 셀을 가리키므로 이물정보를 공유. 이슈 #2 본문 데이터와 대조 결과 값 차이 없음(순수 조인). `cell`이 빈 값(barcode 매칭 실패, No 32/71/136/139)이던 4행은 `NULL` 문자열로 명시하고, 이물정보도 플레이스홀더 텍스트 대신 [GitHub 이슈 #5](https://github.com/sfeelBot/46-util/issues/5) 본문에서 확인한 실제 재질 정보(SUS/AL A/AL B/SCRAP)로 교체함.
 - `unified_map.csv`(참고용): `storage_cellbarcode_map.csv` → `barcode_cell_map.csv` → `cell_material_map.csv`를 미리 조인해 셀번호순으로 정렬한 통합 테이블. `barcode_cell_map.csv`에 없는 바코드/재료만 있고 저장번호 연결이 안 된 셀 91개를 포함해 총 305행.
 
 ## 버전 / 상태
 
 | 항목 | 내용 |
 |------|------|
-| 버전 | 1.4.0 |
-| 상태 | 정상 (서브에이전트 검증 통과, 2026-07-12) |
+| 버전 | 1.5.0 |
+| 상태 | 정상 (서브에이전트 검증 통과, 2026-07-13) |
 | 최초 작성 | 2026-07-12 |
-| 최근 변경 | 2026-07-12 — GitHub 이슈 #5 대응: `folder_crop_remap.py`(폴더 구조 기반 crop 재명명, 파일명에 박힌 저장번호는 무시하고 `{그룹번호}/cropped/` 구조 + `storage_ab_defect_info.csv` 조회로 재명명) + 별도 실행 GUI `gui_folder_remap.py`(gui.py의 `ConversionTab` 재사용) 추가. 이전: 탭 2에 "오름차순으로 번호 매기기" 체크박스 추가, "Crop 이미지 재명명" 탭 추가(`crop_remap.py`), gui.py를 `ConversionTab` 공용 위젯 기반 2탭 구조로 리팩터링, 매칭실패 파일 error 폴더 자동 백업, 신형 파일명(저장번호) 매칭 단계 추가(이슈 #2), `barcode_cell_map.csv` 110→247행 확장, 테이블 컬럼 자유 리사이즈 + 셀 텍스트 선택/복사, 변환 진행률 표시줄, 콘솔 한글 출력 깨짐 수정 |
+| 최근 변경 | 2026-07-13 — GitHub 이슈 #5 대응 방식 전면 재작성: 처음 시도한 폴더구조/그룹번호 기반 접근(`folder_crop_remap.py`)을 폐기하고, 파일명의 저장번호를 `storage_ab_defect_info.csv`와 직접 매칭하는 훨씬 단순한 방식으로 `gui_folder_remap.py`를 완전히 새로 작성(gui.py/core.py/crop_remap.py 비의존, 독립 파일). `cell=NULL` 행도 이물정보만으로 정상 변환. `storage_ab_defect_info.csv`의 결측 이물정보를 이슈 #5 본문의 실제 재질 데이터로 교체. 이전: 탭 2에 "오름차순으로 번호 매기기" 체크박스 추가, "Crop 이미지 재명명" 탭 추가(`crop_remap.py`), gui.py를 `ConversionTab` 공용 위젯 기반 2탭 구조로 리팩터링, 매칭실패 파일 error 폴더 자동 백업, 신형 파일명(저장번호) 매칭 단계 추가(이슈 #2), `barcode_cell_map.csv` 110→247행 확장, 테이블 컬럼 자유 리사이즈 + 셀 텍스트 선택/복사, 변환 진행률 표시줄, 콘솔 한글 출력 깨짐 수정 |
 | Python | 3.12 |
 | 의존성 | PyQt5 |
 
@@ -138,3 +139,4 @@ crop 파일명에 박힌 저장번호를 신뢰할 수 없을 때(GitHub 이슈 
 - `barcode_to_cellNum.py`/`cellNum_to_barcode.py`는 레거시 스크립트로, 하드코딩된 경로(`D:\...`)와 매핑을 그대로 갖고 있어 이 저장소 밖 환경을 가정한다. 새 작업은 `gui.py`를 사용할 것.
 - Crop 재명명(탭 2)은 image_cropper의 출력 파일명 규칙(`_{ROI번호}_x..y..w..h..`)에 정확히 의존한다. 다른 방식으로 자른 이미지는 매칭실패로 처리됨.
 - Crop 재명명은 파일명만 재구성할 뿐 매핑표 조회를 하지 않으므로, 재명명된 시리얼/lane이 실제로 barcode_cell_map.csv 등에 존재하는지는 탭 1에서 다시 불러와야 확인할 수 있다.
+- `gui_folder_remap.py`는 파일명에 저장번호 패턴이 아예 없거나, 여러 개의 서로 다른 저장번호가 섞여 있는 파일명에서는 첫 번째로 찾은 패턴만 사용한다. error 폴더 자동 백업 기능은 없다(매칭실패는 그냥 변환 대상에서 제외).

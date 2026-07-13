@@ -4,12 +4,15 @@ GitHub 이슈 #6 매칭표(storage_number_map.csv)를 기준으로,
 상위폴더의 error/(원본 백업) 와 rename/<진짜 소속 폴더명>/(정리된 사본)으로 재배치한다.
 
 매칭 규칙:
-- storage_number_map.csv 의 "저장번호"가 실제 Test#... 폴더명이다.
-- 같은 행의 "실제저장번호"가 비어있지 않으면, 그 폴더에 있어야 할 파일명의
-  진짜 접두사는 "실제저장번호"이다 (비어있으면 폴더명 자신이 접두사).
-- 어떤 폴더의 bmp 파일명이 자신의 기대 접두사로 시작하지 않으면 "잘못 들어간 파일"이다.
-  이때 전체 매칭표를 뒤져서(기대 접두사 문자열이 가장 긴 것부터) 파일명이 어느 폴더의
-  기대 접두사로 시작하는지 찾아 "진짜 소속 폴더"를 결정한다.
+- storage_number_map.csv 의 "저장번호"가 각 셀의 정식(canonical) 폴더명이다.
+- 같은 행의 "실제저장번호"가 비어있지 않으면, 촬영 시 그 값(예: Test#A1-0000137-6)으로
+  이름 붙은 폴더가 실제로 디스크에 존재할 수 있다 (여러 셀을 한 세션으로 묶어 캡처한
+  원본 폴더). 이런 폴더도 스캔 대상에 포함해야 한다.
+- 모든 bmp 파일은, 전체 매칭표의 기대 접두사(실제저장번호 있으면 그 값, 없으면 저장번호
+  자신, 문자열 긴 것부터 우선 매칭)로 파일명을 검사해 "진짜 소속 저장번호"를 알아낸다.
+- 그 값이 파일이 실제로 들어있는 폴더명과 같으면 정상, 다르면(또는 매칭 자체가 안 되면)
+  "잘못 들어간 파일"로 판정한다. 즉 폴더명이 저장번호 형식이든 실제저장번호 형식이든
+  관계없이, 파일이 진짜 있어야 할 저장번호 폴더와 다르면 전부 재배치 대상이다.
 
 사용법:
     .venv\\Scripts\\python.exe utils\\bmp_misplaced_sorter\\sort_misplaced.py "D:\\path\\to\\top_folder"
@@ -75,6 +78,10 @@ def main():
 
     expected_prefix_map = load_expected_prefix_map(MAP_CSV_PATH)
     reverse_lookup = build_reverse_lookup(expected_prefix_map)
+    # 저장번호(canonical) 뿐 아니라, 촬영 세션이 실제저장번호 그대로 폴더명이 된 경우도 스캔 대상에 포함
+    known_folder_names = set(expected_prefix_map.keys()) | {
+        prefix for prefix, _ in reverse_lookup
+    }
 
     error_dir = os.path.join(top_folder, "error")
     rename_dir = os.path.join(top_folder, "rename")
@@ -88,12 +95,13 @@ def main():
     )
 
     for folder_name in top_subfolders:
-        if folder_name not in expected_prefix_map:
+        if folder_name in ("error", "rename"):
+            continue
+        if folder_name not in known_folder_names:
             subfolders_skipped += 1
             continue
         subfolders_processed += 1
 
-        own_expected_prefix = expected_prefix_map[folder_name]
         folder_path = os.path.join(top_folder, folder_name)
 
         for root, _, files in os.walk(folder_path):
@@ -101,13 +109,13 @@ def main():
                 if not filename.lower().endswith(".bmp"):
                     continue
 
-                if filename.startswith(own_expected_prefix):
+                true_folder, matched_prefix = find_true_folder(filename, reverse_lookup)
+
+                if true_folder == folder_name:
                     count_normal += 1
                     continue
 
                 src_path = os.path.join(root, filename)
-                true_folder, matched_prefix = find_true_folder(filename, reverse_lookup)
-
                 os.makedirs(error_dir, exist_ok=True)
                 error_dest = unique_dest_path(error_dir, filename)
                 shutil.move(src_path, error_dest)

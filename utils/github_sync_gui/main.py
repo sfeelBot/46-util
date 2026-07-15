@@ -450,8 +450,13 @@ class MainWindow(QMainWindow):
         self.cancel_sync_btn.setEnabled(False)
         if self._sync_cancelled:
             self.sync_now_label.setText("취소됨")
+            QMessageBox.information(self, "동기화 취소됨", "동기화가 취소되었습니다.")
+        elif exit_code == 0:
+            self.sync_now_label.setText("완료")
+            QMessageBox.information(self, "동기화 완료", "동기화가 완료되었습니다.")
         else:
-            self.sync_now_label.setText("완료" if exit_code == 0 else f"실패 (code={exit_code})")
+            self.sync_now_label.setText(f"실패 (code={exit_code})")
+            QMessageBox.warning(self, "동기화 실패", f"동기화가 실패했습니다. (code={exit_code})\n로그를 확인하세요.")
         self.refresh_status()
         self.refresh_log()
 

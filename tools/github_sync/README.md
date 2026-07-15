@@ -60,7 +60,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Sync-FromGitHub.ps1 -Force
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Sync-FromGitHub.ps1 -RecreateVenv
 ```
 
-로그는 `StateDir\sync.log`에 누적 기록된다.
+로그는 `StateDir\sync.log`에 누적 기록된다. 단계(GitHub API 조회/ZIP 다운로드/ZIP 압축 해제/robocopy 반영/.venv 생성/pip install)가 바뀔 때마다 직전 단계 소요 시간이 `[단계 완료] <단계명>: N.N초` 형식으로 남고, 실행이 끝나면(성공/변경 없음/실패 어느 경우든) 마지막에 `총 소요 시간: N.N초`가 기록된다. 동기화가 느리게 느껴지면 이 로그로 어느 단계가 오래 걸리는지 바로 확인할 수 있다.
 
 ## 동작 방식 요약
 

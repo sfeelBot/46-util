@@ -37,6 +37,14 @@ GUI가 PowerShell을 호출하는 지점(수동 동기화)과 GitHub API 조회(
 - 그래서 `on_cancel_sync()`는 `taskkill /PID <pid> /T /F`(`/T` = 프로세스 트리 전체)를 `QProcess.startDetached`로 비동기 실행해 powershell.exe와 robocopy.exe를 함께 종료한다.
 - 취소 후 `on_sync_finished`에서 `self._sync_cancelled` 플래그를 보고 "취소됨"으로 표시한다 (실패와 구분).
 
+## 단계별 소요 시간 로그
+
+`Sync-FromGitHub.ps1`이 `초기화 → GitHub API 조회 → ZIP 다운로드 → ZIP 압축 해제 → robocopy 반영 → .venv 생성 → pip install` 단계를 거칠 때마다 `Set-Stage` 헬퍼(내부적으로 `[System.Diagnostics.Stopwatch]` 사용)가 직전 단계의 소요 시간을 `sync.log`에 `[단계 완료] <단계명>: N.N초` 형식으로 기록한다. 성공/"변경 없음" 조기 종료/오류 종료 세 경로 모두 마지막에 `총 소요 시간: N.N초`가 `finally` 블록에서 한 번 기록된다 (오류가 나도 어느 단계에서 몇 초 지나 실패했는지 `오류 발생 [<단계> 단계, N.N초 경과]: ...` 형태로 남는다). 실사용 중 동기화가 느리다고 느껴지면 이 로그(GUI의 "로그" 패널 또는 `StateDir\sync.log`)로 어느 단계가 병목인지 바로 확인할 수 있다.
+
+## 완료 팝업
+
+수동 동기화(`on_sync_now`)가 끝나면 `on_sync_finished`에서 결과에 맞는 `QMessageBox`를 띄운다: 취소됨(정보)/완료(정보)/실패(경고, 코드 포함). 트레이로 창을 숨겨둔 상태에서 동기화를 실행했더라도 팝업은 별도 최상위 창이라 화면에 뜬다.
+
 ## 기능
 
 | 그룹 | 기능 |
@@ -110,3 +118,4 @@ exe 파일 하나만 옮겨서 실행하면 된다.
 - v1.3 — 2026-07-09 로고 아이콘 추가, 시스템 트레이 상주 기능(창 닫아도 백그라운드 실행, 트레이 아이콘 색상으로 ON/OFF 확인, 우클릭 메뉴로 토글) 추가
 - v1.4 — 2026-07-09 "로그 삭제" 버튼 추가, Windows 시작 시 자동 실행(레지스트리 Run 키) 토글 추가, exe 아이콘 적용 재확인
 - v2.0 — 2026-07-13 스케줄 기반 자동 동기화(08/12/18시 예약 작업 on/off, 트레이 ON/OFF 토글) 기능 전체 제거 (`Register-ScheduledTasks.ps1` 삭제 포함). 대신 "강제 동기화 취소" 버튼 추가(`taskkill /T`로 robocopy까지 포함한 프로세스 트리 종료) — 대상 파일이 잠겨 있어 robocopy가 오래 대기할 때 즉시 중단 가능. `Sync-FromGitHub.ps1`의 robocopy에 `/R:3 /W:10`(재시도 3회, 10초 간격) 지정해 잠긴 파일에 대한 대기 시간도 자체적으로 단축
+- v2.1 — 2026-07-13 `Sync-FromGitHub.ps1`에 단계별 소요 시간 로그(`Set-Stage`/`총 소요 시간`) 추가해 동기화가 느릴 때 병목 단계를 로그만으로 파악 가능하게 함. GUI에 수동 동기화 완료/실패/취소 팝업(`QMessageBox`) 추가

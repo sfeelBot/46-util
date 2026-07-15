@@ -74,12 +74,25 @@ function Write-Log([string]$msg) {
     [System.IO.File]::AppendAllText($LogFile, $line + "`r`n", $Utf8NoBom)
 }
 
+# 어느 단계가 느린지 나중에 로그만 보고 파악할 수 있도록, 단계 전환마다 직전 단계의 소요 시간을 기록한다.
+function Format-Seconds([double]$sec) {
+    return $sec.ToString("F1", [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Set-Stage([string]$name) {
+    Write-Log ("[단계 완료] {0}: {1}초" -f $script:stage, (Format-Seconds $script:stageWatch.Elapsed.TotalSeconds))
+    $script:stage = $name
+    $script:stageWatch.Restart()
+}
+
 $tempDir = $null
 $stage = "초기화"
+$totalWatch = [System.Diagnostics.Stopwatch]::StartNew()
+$stageWatch = [System.Diagnostics.Stopwatch]::StartNew()
 try {
     Write-Log "=== Sync 시작 ==="
 
-    $stage = "GitHub API 조회"
+    Set-Stage "GitHub API 조회"
     $headers = @{ "User-Agent" = "46util-sync-script" }
     if ($Token) {
         $headers["Authorization"] = "token $Token"
@@ -96,6 +109,7 @@ try {
 
     if (-not $Force -and -not $RecreateVenv -and $lastSha -eq $latestSha) {
         Write-Log "변경 없음 (이미 최신 $latestSha). 종료."
+        Write-Log ("[단계 완료] {0}: {1}초" -f $stage, (Format-Seconds $stageWatch.Elapsed.TotalSeconds))
         return
     }
 
@@ -106,12 +120,12 @@ try {
     $zipPath = Join-Path $tempDir "repo.zip"
     $extractDir = Join-Path $tempDir "extract"
 
-    $stage = "ZIP 다운로드"
+    Set-Stage "ZIP 다운로드"
     $zipUrl = "https://github.com/$Owner/$Repo/archive/refs/heads/$Branch.zip"
     Invoke-WebRequest -Uri $zipUrl -Headers $headers -OutFile $zipPath -UseBasicParsing
     Write-Log "ZIP 다운로드 완료: $zipUrl"
 
-    $stage = "ZIP 압축 해제"
+    Set-Stage "ZIP 압축 해제"
     Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
     $innerDir = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1
@@ -127,7 +141,7 @@ try {
         Remove-Item -Recurse -Force $venvPath
     }
 
-    $stage = "robocopy 반영"
+    Set-Stage "robocopy 반영"
     Write-Log "robocopy로 반영 중 (.venv 폴더 및 로컬 전용 파일은 보존): $($innerDir.FullName) -> $DestDir"
     $robocopyArgs = @(
         $innerDir.FullName,
@@ -152,14 +166,14 @@ try {
     }
     Write-Log "robocopy 완료 (ExitCode=$rc)"
 
-    $stage = ".venv 생성"
+    Set-Stage ".venv 생성"
     $venvPython = Join-Path $venvPath "Scripts\python.exe"
     if (-not (Test-Path $venvPython)) {
         Write-Log ".venv 없음 -> 새로 생성 (py -3.12)"
         & $PythonExe -3.12 -m venv $venvPath
     }
 
-    $stage = "pip install"
+    Set-Stage "pip install"
     $reqFile = Join-Path $DestDir "requirements.txt"
     if (Test-Path $reqFile) {
         Write-Log "pip install -r requirements.txt 실행"
@@ -167,6 +181,7 @@ try {
     }
 
     Set-Content -Path $StateFile -Value $latestSha
+    Write-Log ("[단계 완료] {0}: {1}초" -f $stage, (Format-Seconds $stageWatch.Elapsed.TotalSeconds))
     Write-Log "동기화 완료. 최신 커밋 $latestSha 로 갱신됨."
 }
 catch {
@@ -184,7 +199,7 @@ catch {
         "pip install"    { "이 PC의 pip 프록시/사내망 미러 설정을 확인하세요." }
         default           { $null }
     }
-    Write-Log "오류 발생 [$stage 단계]: $($_.Exception.Message)"
+    Write-Log ("오류 발생 [{0} 단계, {1}초 경과]: {2}" -f $stage, (Format-Seconds $stageWatch.Elapsed.TotalSeconds), $_.Exception.Message)
     if ($hint) {
         Write-Log "[조치 필요 - 이 PC에서 확인] $hint"
     }
@@ -194,5 +209,6 @@ finally {
     if ($tempDir -and (Test-Path $tempDir)) {
         Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
     }
+    Write-Log ("총 소요 시간: {0}초" -f (Format-Seconds $totalWatch.Elapsed.TotalSeconds))
     Write-Log "=== Sync 종료 ==="
 }

@@ -2,14 +2,6 @@
 import os
 import re
 import shutil
-import sys
-
-# Windows 콘솔(cp949 등)에서 한글/이모지 출력이 깨지는 것을 방지.
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
 
 # =========================
 # 1. 매핑 데이터

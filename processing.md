@@ -19,6 +19,7 @@
 | bmp_folder_counter | GUI 없는 단일 스크립트. 상위폴더 > 1단계 하위폴더(이름순 첫번째만) > 2단계 하위폴더 구조에서, 2단계 하위폴더별 bmp 파일 개수(재귀 포함, 대소문자 무시)를 집계해 csv/md 표로 저장 | [utils/bmp_folder_counter/processing.md](utils/bmp_folder_counter/processing.md) |
 | bmp_rename_by_folder | GUI 없는 단일 스크립트. 상위폴더 안의 `Test#A5-0000013` 형식 하위폴더 전체를 대상으로, 각 하위폴더 안 bmp 파일명의 폴더명과 같은 형식 부분(prefix+숫자)을 실제 폴더명으로 일괄 치환(rename). 패턴 불일치/충돌 파일은 하위폴더별 error 폴더로 이동 + rename_log.csv 기록 | [utils/bmp_rename_by_folder/processing.md](utils/bmp_rename_by_folder/processing.md) |
 | bmp_misplaced_sorter | GUI 없는 단일 스크립트. GitHub 이슈 #6 매칭표(동봉 storage_number_map.csv)를 기준으로 `Test#A[1-8]-0000NNN` 폴더에 잘못 들어간 bmp 파일을 찾아, 상위폴더의 error/(원본 백업)와 rename/<진짜 소속 폴더명>/(정리된 사본)으로 재배치 + sort_log.csv 기록 | [utils/bmp_misplaced_sorter/processing.md](utils/bmp_misplaced_sorter/processing.md) |
+| folder_suffix_copier | 지정 폴더를 재귀 탐색해 파일(bmp/raw 기본, 스캔된 확장자 체크박스 선택)에 상위 폴더명들을 `_`로 이은 접미어를 붙인 사본을 만드는 PyQt5 GUI. 별도 출력 폴더 모으기/원본 옆 생성 선택, 변경 전→후 미리보기 테이블 + 로그창, 이름 충돌 시 번호 부여, 원본 보존(복사만) | [utils/folder_suffix_copier/processing.md](utils/folder_suffix_copier/processing.md) |
 
 ---
 

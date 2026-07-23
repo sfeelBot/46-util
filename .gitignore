@@ -11,3 +11,6 @@ utils/github_sync_gui/*.spec
 utils/image_cropper/build/
 utils/image_cropper/dist/
 utils/image_cropper/*.spec
+utils/feel_capture/build/
+utils/feel_capture/dist/
+utils/feel_capture/*.spec

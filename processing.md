@@ -20,6 +20,7 @@
 | bmp_rename_by_folder | GUI 없는 단일 스크립트. 상위폴더 안의 `Test#A5-0000013` 형식 하위폴더 전체를 대상으로, 각 하위폴더 안 bmp 파일명의 폴더명과 같은 형식 부분(prefix+숫자)을 실제 폴더명으로 일괄 치환(rename). 패턴 불일치/충돌 파일은 하위폴더별 error 폴더로 이동 + rename_log.csv 기록 | [utils/bmp_rename_by_folder/processing.md](utils/bmp_rename_by_folder/processing.md) |
 | bmp_misplaced_sorter | GUI 없는 단일 스크립트. GitHub 이슈 #6 매칭표(동봉 storage_number_map.csv)를 기준으로 `Test#A[1-8]-0000NNN` 폴더에 잘못 들어간 bmp 파일을 찾아, 상위폴더의 error/(원본 백업)와 rename/<진짜 소속 폴더명>/(정리된 사본)으로 재배치 + sort_log.csv 기록 | [utils/bmp_misplaced_sorter/processing.md](utils/bmp_misplaced_sorter/processing.md) |
 | folder_suffix_copier | 지정 폴더를 재귀 탐색해 파일(bmp/raw 기본, 스캔된 확장자 체크박스 선택)에 상위 폴더명들을 `_`로 이은 접미어를 붙인 사본을 만드는 PyQt5 GUI. 별도 출력 폴더 모으기/원본 옆 생성 선택, 변경 전→후 미리보기 테이블 + 로그창, 이름 충돌 시 번호 부여, 원본 보존(복사만) | [utils/folder_suffix_copier/processing.md](utils/folder_suffix_copier/processing.md) |
+| feel_capture (필캡쳐) | 시스템 트레이 상주 화면 캡쳐/녹화 PyQt5 도구. 드래그 방식(화면 어둡게+선택영역만 밝게)과 영역(빨간 고정 박스, 이동/리사이즈/우클릭 프리셋) 2가지 캡쳐 모드, 클립보드 또는 타임스탬프 파일명 폴더 저장(png/jpg/bmp/webp/tiff + gif/mp4/avi 실제 녹화), 저장 시 리사이즈, 사용자 지정 전역 단축키(모드 토글식 녹화 시작/종료 포함), 멀티 모니터 지원. PyInstaller exe 빌드 + 아이콘 생성 스크립트 포함 | [utils/feel_capture/processing.md](utils/feel_capture/processing.md) |
 
 ---
 

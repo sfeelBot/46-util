@@ -20,6 +20,7 @@ util별 버그/이슈를 모아보는 인덱스 문서. 상세 기록은 해당 
 | bmp_rename_by_folder | [utils/bmp_rename_by_folder/QA.md](utils/bmp_rename_by_folder/QA.md) | 아직 기록된 이슈 없음 (서브에이전트 검증 통과, 2026-07-13) |
 | bmp_misplaced_sorter | [utils/bmp_misplaced_sorter/QA.md](utils/bmp_misplaced_sorter/QA.md) | 아직 기록된 이슈 없음 (서브에이전트 검증 통과, 2026-07-13, 이슈 #6 매칭표 기반) |
 | folder_suffix_copier | [utils/folder_suffix_copier/QA.md](utils/folder_suffix_copier/QA.md) | 아직 기록된 이슈 없음 (서브에이전트 검증 34개 체크 통과, 2026-07-15) |
+| feel_capture | [utils/feel_capture/QA.md](utils/feel_capture/QA.md) | 서브에이전트 독립 검증에서 버그 2건 발견(RegionBox 리사이즈 순간이동, 빈 region_presets 미복구) 후 모두 수정 완료·재검증·exe 재빌드 (2026-07-23) |
 
 ---
 

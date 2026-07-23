@@ -4,3 +4,5 @@ PyQt5
 Pillow
 pyqtgraph
 pyinstaller
+mss
+keyboard

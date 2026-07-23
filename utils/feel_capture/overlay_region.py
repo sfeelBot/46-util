@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
 
 EDGE_MARGIN = 8
 MIN_SIZE = 30
+HANDLE_HEIGHT = 14  # 상단 이동 전용 손잡이 두께
 
 
 class RegionBox(QWidget):
@@ -49,12 +50,21 @@ class RegionBox(QWidget):
         painter.setPen(pen)
         painter.drawRect(1, 1, self.width() - 2, self.height() - 2)
 
+        # 상단 이동 전용 손잡이: 굵은 반투명 바로 "여기를 잡고 끌기" 시각적 표시
+        handle_rect = QRect(3, 3, max(0, self.width() - 6), max(0, HANDLE_HEIGHT - 3))
+        painter.fillRect(handle_rect, QColor(255, 0, 0, 160))
+
     def _hit_test(self, pos):
-        if self.locked:
-            return None
         w, h = self.width(), self.height()
         left = pos.x() <= EDGE_MARGIN
         right = pos.x() >= w - EDGE_MARGIN
+
+        # 상단 손잡이 영역(모서리 리사이즈용 좌우 끝은 제외)은 항상 이동 전용
+        if pos.y() <= HANDLE_HEIGHT and not left and not right:
+            return "move"
+
+        if self.locked:
+            return None
         top = pos.y() <= EDGE_MARGIN
         bottom = pos.y() >= h - EDGE_MARGIN
         if top and left:

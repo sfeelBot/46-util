@@ -21,11 +21,14 @@ from PyQt5.QtWidgets import (
 )
 
 from capture_core import grab_region, grab_virtual_desktop, save_static_image
-from config import RECORD_EXTS, load_config, save_config
+from config import APP_VERSION, RECORD_EXTS, load_config, save_config
+from logger import get_logger, install_excepthook, log_environment_info, setup_logging
 from overlay_drag import DragSelectOverlay
 from overlay_region import RegionBox
 from recorder import RecordIndicator, RecorderThread
 from settings_dialog import SettingsDialog
+
+log = get_logger()
 
 
 def resource_path(relative: str) -> str:
@@ -51,8 +54,9 @@ class HotkeyManager:
             try:
                 kb.add_hotkey(hotkey_str, self._callback)
                 self._registered = hotkey_str
-            except Exception as e:
-                print(f"[필캡쳐] 단축키 등록 실패: {hotkey_str} ({e})")
+                log.info("단축키 등록: %s", hotkey_str)
+            except Exception:
+                log.exception("단축키 등록 실패: %s", hotkey_str)
 
     def clear(self):
         if self._registered:
@@ -68,6 +72,10 @@ class TrayApp(QObject):
         super().__init__()
         self.app = app
         self.cfg = load_config()
+
+        setup_logging(self.cfg.get("log_folder", ""))
+        install_excepthook(log)
+        log_environment_info(log, APP_VERSION)
 
         self.drag_overlay = None
         self.region_box = None
@@ -110,6 +118,11 @@ class TrayApp(QObject):
         quit_act.triggered.connect(self.quit)
 
         self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self._on_tray_activated)
+
+    def _on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self.open_settings()
 
     # ------------------------------------------------------------ config
     def _apply_config(self):
@@ -151,6 +164,7 @@ class TrayApp(QObject):
         save_config(self.cfg)
 
     def _set_mode(self, mode):
+        log.info("모드 변경: %s", mode)
         self.cfg["mode"] = mode
         save_config(self.cfg)
         self._apply_config()
@@ -160,10 +174,20 @@ class TrayApp(QObject):
         if dlg.exec_():
             self.cfg = dlg.result_config()
             save_config(self.cfg)
+            setup_logging(self.cfg.get("log_folder", ""))
+            log.info(
+                "설정 저장됨: mode=%s save_target=%s extension=%s hotkey=%s log_folder=%s",
+                self.cfg["mode"], self.cfg["save_target"], self.cfg["extension"],
+                self.cfg["hotkey"], self.cfg.get("log_folder", "(비활성)"),
+            )
             self._apply_config()
 
     # ----------------------------------------------------------- capture
     def on_hotkey(self):
+        log.info(
+            "단축키 트리거: mode=%s extension=%s 녹화중=%s",
+            self.cfg["mode"], self.cfg["extension"], self.recorder is not None,
+        )
         if self.recorder is not None:
             self._stop_recording()
             return
@@ -173,6 +197,7 @@ class TrayApp(QObject):
 
         if cfg["mode"] == "region":
             if self.region_box is None:
+                log.warning("영역 모드인데 region_box가 없어 캡쳐를 건너뜀")
                 return
             rect = self.region_box.rect_in_screen()
             if is_record_format:
@@ -196,8 +221,10 @@ class TrayApp(QObject):
     def _on_drag_finished(self, rect, for_recording: bool):
         self.drag_overlay = None
         if rect is None:
+            log.info("드래그 선택 취소됨")
             return
         region = (rect.x(), rect.y(), rect.width(), rect.height())
+        log.info("드래그 선택 완료: region=%s for_recording=%s", region, for_recording)
         if for_recording:
             self._start_recording(region)
         else:
@@ -206,9 +233,14 @@ class TrayApp(QObject):
 
     def _finish_static_capture(self, img):
         ok, msg = save_static_image(img, self.cfg)
+        (log.info if ok else log.error)("정지 캡쳐 결과: %s", msg)
         self._notify(msg, ok)
 
     def _start_recording(self, rect):
+        log.info(
+            "녹화 시작: rect=%s extension=%s fps=%s output_folder=%s",
+            rect, self.cfg["extension"], self.cfg.get("fps"), self.cfg.get("output_folder"),
+        )
         self.recorder = RecorderThread(rect, dict(self.cfg))
         self.recorder.finished_result.connect(self._on_recording_finished)
         ix, iy, _iw, _ih = rect
@@ -218,9 +250,11 @@ class TrayApp(QObject):
 
     def _stop_recording(self):
         if self.recorder is not None:
+            log.info("녹화 종료 요청")
             self.recorder.request_stop()
 
     def _on_recording_finished(self, ok: bool, msg: str):
+        (log.info if ok else log.error)("녹화 결과: %s", msg)
         if self.indicator is not None:
             self.indicator.close()
             self.indicator = None
@@ -232,6 +266,7 @@ class TrayApp(QObject):
         self.tray.showMessage("필캡쳐", msg, icon, 3000)
 
     def quit(self):
+        log.info("필캡쳐 종료 요청 (트레이 메뉴)")
         self.hotkey_mgr.clear()
         if self.region_box is not None:
             self.region_box.close()

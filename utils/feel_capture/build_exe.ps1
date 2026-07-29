@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     필캡쳐(feel_capture/main.py)를 단일 실행파일(exe)로 빌드한다.
     assets/icon.ico를 exe 아이콘 및 트레이 아이콘 리소스로 함께 번들한다.

@@ -7,6 +7,10 @@ from pathlib import Path
 import mss
 from PIL import Image
 
+from logger import get_logger
+
+log = get_logger()
+
 
 def grab_virtual_desktop():
     """모든 모니터를 아우르는 가상 데스크톱 전체를 캡처한다.
@@ -28,6 +32,27 @@ def grab_region(x: int, y: int, w: int, h: int) -> Image.Image:
         return Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
 
 
+def excel_col_width_to_px(width_chars: float, mdw: int = 7) -> int:
+    """엑셀 열 너비(문자 수, 예: 기본값 8.43)를 픽셀로 변환.
+
+    Calibri 11(엑셀 기본 글꼴, 96 DPI) 기준의 근사식(width_chars*MDW+5)이다.
+    기본 열 너비 8.43 -> 64px로, 엑셀에서 흔히 알려진 기본값과 일치한다.
+    다른 글꼴/DPI/확대 비율에서는 실제 엑셀 표시와 약간 차이가 날 수 있다.
+    """
+    return max(1, round(width_chars * mdw + 5))
+
+
+def excel_row_height_to_px(height_pt: float) -> int:
+    """엑셀 행 높이(포인트, 예: 기본값 15)를 픽셀로 변환 (96 DPI 기준, 1pt = 96/72px)."""
+    return max(1, round(height_pt * 96 / 72))
+
+
+def _fit_within(img_w: int, img_h: int, box_w: int, box_h: int) -> tuple[int, int]:
+    """원본 비율을 유지한 채 (box_w, box_h) 안에 들어가는 최대 크기를 계산."""
+    scale = min(box_w / img_w, box_h / img_h)
+    return max(1, round(img_w * scale)), max(1, round(img_h * scale))
+
+
 def apply_resize(img: Image.Image, cfg: dict) -> Image.Image:
     if not cfg.get("resize_enabled"):
         return img
@@ -36,6 +61,11 @@ def apply_resize(img: Image.Image, cfg: dict) -> Image.Image:
         pct = max(1, int(cfg.get("resize_percent", 100))) / 100.0
         new_w = max(1, round(img.width * pct))
         new_h = max(1, round(img.height * pct))
+    elif mode == "excel":
+        box_w = excel_col_width_to_px(cfg.get("excel_col_width") or 8.43)
+        box_h = excel_row_height_to_px(cfg.get("excel_row_height") or 15.0)
+        # 비율을 유지한 채 엑셀 셀 크기 안에 들어가도록 축소/확대 (찌그러짐 없음)
+        new_w, new_h = _fit_within(img.width, img.height, box_w, box_h)
     else:
         new_w = cfg.get("resize_width") or 0
         new_h = cfg.get("resize_height") or 0
@@ -84,10 +114,12 @@ def save_static_image(img: Image.Image, cfg: dict) -> tuple[bool, str]:
             copy_to_clipboard(img)
             return True, "클립보드에 복사했습니다."
         except Exception as e:
+            log.exception("클립보드 복사 실패")
             return False, f"클립보드 복사 실패: {e}"
 
     folder = cfg.get("output_folder", "")
     if not folder:
+        log.error("정지 이미지 저장 실패: 출력 폴더가 설정되지 않음")
         return False, "출력 폴더가 설정되지 않았습니다."
     try:
         path = make_output_path(folder, ext)
@@ -95,4 +127,5 @@ def save_static_image(img: Image.Image, cfg: dict) -> tuple[bool, str]:
         save_img.save(str(path))
         return True, f"저장됨: {path}"
     except Exception as e:
+        log.exception("정지 이미지 저장 실패: folder=%s ext=%s", folder, ext)
         return False, f"저장 실패: {e}"

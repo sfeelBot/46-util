@@ -12,6 +12,9 @@ from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from capture_core import apply_resize, make_output_path
+from logger import get_logger
+
+log = get_logger()
 
 
 class RecordIndicator(QWidget):
@@ -61,6 +64,7 @@ class RecorderThread(QThread):
 
         folder = self.cfg.get("output_folder", "")
         if not folder:
+            log.error("녹화 실패: 출력 폴더가 설정되지 않음")
             self.finished_result.emit(False, "출력 폴더가 설정되지 않았습니다.")
             return
 
@@ -71,6 +75,7 @@ class RecorderThread(QThread):
             else:
                 self._record_video(out_path, ext, fps, interval)
         except Exception as e:
+            log.exception("녹화 실패: rect=(%s,%s,%s,%s) ext=%s", self.x, self.y, self.w, self.h, ext)
             self.finished_result.emit(False, f"녹화 실패: {e}")
 
     def _grab(self, sct) -> Image.Image:

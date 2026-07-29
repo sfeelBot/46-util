@@ -13,6 +13,7 @@
 utils/feel_capture/
 ├── main.py             # TrayApp: 트레이 아이콘/메뉴, 단축키 연결, 캡쳐/녹화 흐름 오케스트레이션
 ├── config.py            # 설정 스키마 + %APPDATA%\FeelCapture\config.json 로드/저장
+├── logger.py             # 회전 로그 파일 설정 + 환경정보 기록 + 처리되지 않은 예외 후킹
 ├── capture_core.py      # mss 기반 화면 캡처, 리사이즈, 클립보드 복사, 정지 이미지 저장, 파일명 생성
 ├── overlay_drag.py       # 드래그 방식 스크린샷 오버레이 (DragSelectOverlay)
 ├── overlay_region.py     # 영역(고정 박스) 위젯 (RegionBox) — 이동/리사이즈/우클릭 프리셋 메뉴
@@ -41,7 +42,13 @@ utils/feel_capture/
   - `RecorderThread`(QThread)가 `cfg["fps"]` 간격으로 해당 영역만 `mss`로 반복 캡처한다. gif는 프레임을 메모리에 모았다가 종료 시 Pillow `save_all=True`로 한 번에 인코딩(긴 녹화일수록 메모리 사용량이 늘어남 — 아래 제약사항 참고). mp4/avi는 프레임마다 OpenCV `VideoWriter`에 바로 기록(mp4v/XVID 코덱)하므로 메모리 부담이 적다.
 
 ### 3. 리사이즈
-- `capture_core.apply_resize`: "사용 안 함" / "고정 크기(W·H, 한쪽을 비우면 비율 유지)" / "비율(%)" 3가지 모드. 정지 이미지·gif·동영상 모두 프레임 단위로 동일하게 적용된다(동영상은 첫 프레임 크기로 `VideoWriter` 해상도가 고정됨).
+- `capture_core.apply_resize`: "사용 안 함" / "고정 크기(W·H, 한쪽을 비우면 비율 유지)" / "비율(%)" / "엑셀 셀 크기에 맞춤" 4가지 모드. 정지 이미지·gif·동영상 모두 프레임 단위로 동일하게 적용된다(동영상은 첫 프레임 크기로 `VideoWriter` 해상도가 고정됨).
+- **엑셀 셀 크기에 맞춤** (`resize_mode: "excel"`, 2026-07-29 추가): 캡쳐 이미지를 엑셀 시트에 붙여넣기 좋은 크기로 자동 축소한다.
+  - 사용자는 엑셀 화면에서 직접 보이는 단위 그대로 입력한다 — **열 너비(문자 수, 기본값 8.43)**, **행 높이(포인트, 기본값 15)**. 엑셀에서 열/행 머리글 경계를 드래그할 때 뜨는 툴팁 숫자를 그대로 입력하면 된다.
+  - `excel_col_width_to_px(chars)` = `round(chars * 7 + 5)`, `excel_row_height_to_px(pt)` = `round(pt * 96/72)` — Calibri 11(엑셀 기본 글꼴), 96 DPI 기준의 근사식. 기본값 8.43자/15pt → 64x20px로, 엑셀에서 통상 알려진 기본 셀 픽셀 크기와 일치함을 확인. 다른 글꼴/DPI/화면 배율에서는 실제 엑셀 표시와 약간 차이가 날 수 있음(제약사항 참고).
+  - **중요: 원본 비율을 절대 깨지 않는다.** 계산된 셀 픽셀 크기(W_cell, H_cell)를 그대로 스트레치하는 게 아니라, `min(W_cell/img_w, H_cell/img_h)`로 스케일 배율을 구해 그 배율로만 축소/확대한다(`_fit_within`, CSS `object-fit: contain`과 동일한 방식) — 즉 이미지가 셀보다 옆으로 길면 셀 너비에 맞춰 축소되고 위아래에 여백이 생기며(높이가 셀보다 작아짐), 세로로 길면 그 반대. 가로세로 중 어느 쪽도 셀 크기를 넘지 않으면서 비율은 항상 원본과 동일하게 유지된다.
+  - 항상 셀 1개 크기 기준으로 계산한다(여러 칸에 걸치는 옵션은 없음 — 사용자 확인 사항).
+  - 설정 다이얼로그에 입력한 열너비/행높이로 계산되는 픽셀 크기를 실시간으로 미리보기(`≈ 셀 크기 W x H px`)한다.
 
 ### 4. 단축키
 - 하나의 전역 단축키가 "현재 선택된 모드"를 실행한다(모드별 단축키 분리 없음 — 사용자 확인 사항).
@@ -49,20 +56,29 @@ utils/feel_capture/
 - `keyboard` 라이브러리는 저수준 전역 후킹을 별도 스레드에서 수행하므로, 콜백은 `HotkeyBridge(QObject)`의 시그널(`fired`)을 통해 Qt 메인 스레드로 안전하게 전달한다.
 
 ### 5. 트레이 / 백그라운드 상주
-- 창 없이 시스템 트레이 아이콘만 상주한다(`QApplication.setQuitOnLastWindowClosed(False)`). 우클릭 메뉴: 모드(드래그/영역) 전환, 설정..., 종료.
+- 창 없이 시스템 트레이 아이콘만 상주한다(`QApplication.setQuitOnLastWindowClosed(False)`). 우클릭 메뉴: 모드(드래그/영역) 전환, 설정..., 종료. 트레이 아이콘을 좌클릭(단일/더블클릭 모두)하면 바로 설정 다이얼로그가 열린다(`_on_tray_activated`, 2026-07-28 추가 — 드래그 모드에서는 화면에 클릭할 영역 박스가 없어 설정 진입 경로가 우클릭 메뉴뿐이었던 점 개선).
 - 설정 변경/모드 전환 시 `_apply_config()`가 단축키 재등록과 영역 박스 표시/숨김을 함께 처리한다.
 
 ## 설정 파일
-`%APPDATA%\FeelCapture\config.json` — `mode`, `save_target`, `output_folder`, `extension`, `resize_enabled`/`resize_mode`/`resize_width`/`resize_height`/`resize_percent`, `hotkey`, `fps`, `region_box`(x/y/w/h/locked), `region_presets`(이름/W/H 3개).
+`%APPDATA%\FeelCapture\config.json` — `mode`, `save_target`, `output_folder`, `extension`, `resize_enabled`/`resize_mode`/`resize_width`/`resize_height`/`resize_percent`, `hotkey`, `fps`, `log_folder`, `region_box`(x/y/w/h/locked), `region_presets`(이름/W/H 3개).
+
+## 로그 (`logger.py`)
+- 설정 다이얼로그의 "로그" 항목에서 지정한 폴더(기본값 `%APPDATA%\FeelCapture\logs`)에 `feel_capture.log` 파일을 남긴다. `logging.handlers.RotatingFileHandler`로 2MB를 넘으면 `feel_capture.log.1`/`.2`/`.3`으로 순환(최대 4개 파일, 무한정 커지지 않음).
+- 로그 폴더를 빈 값으로 두면 파일 핸들러를 붙이지 않아 로깅이 꺼진다(`setup_logging("")`). 설정에서 로그 폴더를 바꾸면 즉시 기존 핸들러를 닫고 새 폴더로 교체한다.
+- 앱 시작 시 OS(`platform.platform()`)/Python 버전/PyQt5·Qt 버전/실행 모드(exe인지 python 스크립트인지)/앱 버전(`config.APP_VERSION`)을 헤더로 기록한다.
+- `sys.excepthook`을 후킹해 처리되지 않은 예외를 전체 traceback과 함께 `CRITICAL` 레벨로 기록한 뒤 원래 처리(콘솔 출력)로 넘긴다(`install_excepthook`).
+- 단축키 트리거, 모드/설정 변경, 드래그 선택 완료/취소, 정지 캡쳐/녹화 시작·결과, 단축키 등록/등록실패를 모두 INFO(성공)/ERROR(실패) 레벨로 기록한다. 파일 저장·녹화 실패의 예외는 `capture_core.py`/`recorder.py`에서 `log.exception(...)`으로 전체 traceback을 남긴다.
+- **버그 재현 시 이 로그 파일(`feel_capture.log`, 필요하면 `.1`/`.2`/`.3`도)을 GitHub issue에 그대로 붙여넣으면 된다** — 타임스탬프·환경정보·직전에 어떤 동작을 시도했는지·예외 traceback까지 한 파일에 남으므로, 재현 스크립트 없이도 로그만으로 원인 진단이 가능하도록 설계함.
 
 ## 사용법
 ```
 .venv\Scripts\python.exe utils\feel_capture\main.py
 ```
-1. 처음 실행하면 트레이에 카메라 아이콘이 뜬다. 우클릭 → "설정..."에서 모드/저장방식/출력폴더/확장자/리사이즈/단축키/프리셋을 지정한다.
+1. 처음 실행하면 트레이에 카메라 아이콘이 뜬다. 트레이 아이콘을 클릭(좌클릭/더블클릭 아무거나)하거나 우클릭 → "설정..."을 선택하면 설정 다이얼로그가 열린다. 모드/저장방식/출력폴더/확장자/리사이즈(엑셀 셀 크기 맞춤 포함)/단축키/로그 폴더/프리셋을 지정한다.
 2. 지정한 단축키를 누르면 현재 모드로 캡쳐(또는 녹화 시작)가 실행된다.
-3. 영역 모드일 때는 화면의 빨간 박스를 드래그로 옮기거나 가장자리를 끌어 크기를 조절할 수 있다. 우클릭하면 프리셋/사용자 지정 크기/고정 토글/설정 열기 메뉴가 뜬다.
+3. 영역 모드일 때는 화면의 빨간 박스 상단 손잡이를 드래그로 옮기거나 가장자리를 끌어 크기를 조절할 수 있다. 우클릭하면 프리셋/사용자 지정 크기/고정 토글/설정 열기 메뉴가 뜬다.
 4. 완전히 종료하려면 트레이 아이콘 우클릭 → "종료".
+5. 문제가 생기면 설정의 "로그 폴더"에 지정된 위치(기본값 `%APPDATA%\FeelCapture\logs`)의 `feel_capture.log` 파일을 GitHub issue에 붙여넣으면 원인 진단에 도움이 된다.
 
 ## exe 빌드 (PyInstaller)
 ```
@@ -70,6 +86,7 @@ utils\feel_capture\assets\generate_icons.py   # 아이콘이 없다면 먼저 �
 utils\feel_capture\build_exe.ps1
 ```
 `assets/icon.ico`를 exe 아이콘 및 트레이 아이콘 리소스로 번들해 `dist\FeelCapture.exe`(단일 파일)를 생성한다. 실제 빌드 후 exe를 직접 실행해 트레이 아이콘이 뜨고 크래시 없이 유지되는 것을 확인함(2026-07-23).
+`build_exe.ps1` 파일 자체는 **UTF-8 with BOM**으로 저장되어 있어야 한다 — BOM이 없으면 Windows PowerShell 5.1이 시스템 기본 코드페이지로 해석해 스크립트 안의 한글 안내 문구가 깨져 출력된다(2026-07-29, [QA.md](QA.md) 참고). 앞으로 이 파일을 수정할 때도 BOM 있는 UTF-8을 유지해야 한다.
 
 ## 의존성
 `PyQt5`(GUI/트레이/오버레이), `mss`(화면 캡처), `Pillow`(리사이즈/정지이미지·gif 저장), `opencv-python`+`numpy`(mp4/avi 인코딩), `keyboard`(전역 단축키), `pyinstaller`(exe 빌드 시에만 필요) — 모두 저장소 공용 `requirements.txt`에 포함됨.
@@ -80,8 +97,10 @@ utils\feel_capture\build_exe.ps1
 - gif 녹화는 프레임을 메모리에 모았다가 종료 시 한 번에 인코딩하므로, 아주 길게(수 분 이상) 녹화하면 메모리 사용량이 커질 수 있다. 긴 녹화에는 mp4/avi 사용을 권장.
 - 애니메이션 gif는 화면 캡쳐로 확인 가능한 "가벼운 gif 녹화" 목적이며, 색상 팔레트 제한(256색) 등 gif 포맷 자체의 한계를 그대로 따른다.
 - 클립보드 저장은 정지 이미지 포맷에서만 지원한다(gif/mp4/avi는 항상 파일 저장).
+- 엑셀 셀 크기 맞춤 리사이즈의 열너비→px/행높이→px 변환은 Calibri 11·96 DPI 기준 근사식이라, 다른 기본 글꼴을 쓰거나 Windows 디스플레이 배율이 100%가 아니면 실제 엑셀 셀 크기와 약간 차이가 날 수 있다.
 
 ## 버전
 - v1.0 — 2026-07-23 최초 작성. 드래그/영역 캡쳐, 클립보드/파일 저장(정지 이미지 + gif/mp4/avi 녹화), 저장 시 리사이즈, 사용자 지정 전역 단축키, 시스템 트레이 상주, PyInstaller exe 빌드 + 아이콘 생성 스크립트 포함.
 - v1.1 — 2026-07-23 서브에이전트 독립 검증에서 발견된 버그 2건 수정: `overlay_region.RegionBox`의 서/북 리사이즈 핸들을 반대쪽 경계 너머로 드래그하면 박스가 커서 위치로 순간이동하던 문제(반대쪽 경계를 앵커로 좌표 자체를 미리 클램프하도록 수정), `config.load_config()`가 `region_presets: []`인 config.json을 만나면 기본 프리셋 3개로 복구되지 않던 문제(사후 검사로 무조건 복구하도록 수정). 자세한 내용은 [QA.md](QA.md) 참고.
 - v1.2 — 2026-07-23 영역 박스 상단에 굵은 반투명 이동 전용 손잡이(`HANDLE_HEIGHT=14px`) 추가 — 테두리를 잡으면 리사이즈로 인식돼 이동이 어렵다는 사용자 피드백 반영. 양쪽 맨 끝 모서리(nw/ne)는 대각선 리사이즈로 남겨두고, 그 외 상단 전체는 항상 이동으로 동작.
+- v1.3 — 2026-07-29 세 가지 추가: (1) 로그 기능(`logger.py`) — 회전 로그 파일 + 설정 가능한 로그 폴더 + 환경정보/예외 traceback 기록, 문제 재현 시 GitHub issue에 붙여넣어 진단할 수 있도록 설계. (2) 트레이 아이콘 클릭(좌클릭/더블클릭)으로 설정 다이얼로그 바로 열기. (3) "엑셀 셀 크기에 맞춤" 리사이즈 모드 추가 — 열너비(문자수)/행높이(포인트)를 엑셀 표시 단위 그대로 입력하면 그 셀 크기 안에 비율을 깨지 않고 맞춰 축소. `build_exe.ps1`을 UTF-8 with BOM으로 재저장(PowerShell 한글 출력 깨짐 수정, [QA.md](QA.md) 참고).

@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -22,6 +23,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from capture_core import excel_col_width_to_px, excel_row_height_to_px
 from config import ALL_EXTS, RECORD_EXTS, STATIC_EXTS
 
 
@@ -97,7 +99,8 @@ class SettingsDialog(QDialog):
         self.rb_resize_off = QRadioButton("사용 안 함")
         self.rb_resize_fixed = QRadioButton("고정 크기 (W x H, 한쪽 비우면 비율 유지)")
         self.rb_resize_percent = QRadioButton("비율 (%)")
-        for rb in (self.rb_resize_off, self.rb_resize_fixed, self.rb_resize_percent):
+        self.rb_resize_excel = QRadioButton("엑셀 셀 크기에 맞춤 (비율 유지, 셀 안에 최대로 들어가는 크기)")
+        for rb in (self.rb_resize_off, self.rb_resize_fixed, self.rb_resize_percent, self.rb_resize_excel):
             self.resize_group.addButton(rb)
             resize_form.addRow(rb)
 
@@ -119,6 +122,33 @@ class SettingsDialog(QDialog):
         self.resize_percent_spin.setSuffix(" %")
         resize_form.addRow(self.resize_percent_spin)
 
+        excel_row = QHBoxLayout()
+        self.excel_col_width_spin = QDoubleSpinBox()
+        self.excel_col_width_spin.setRange(0.1, 255)
+        self.excel_col_width_spin.setDecimals(2)
+        self.excel_col_width_spin.setSuffix(" 문자")
+        self.excel_row_height_spin = QDoubleSpinBox()
+        self.excel_row_height_spin.setRange(0.1, 999)
+        self.excel_row_height_spin.setDecimals(1)
+        self.excel_row_height_spin.setSuffix(" pt")
+        self.excel_col_width_spin.valueChanged.connect(self._update_excel_preview)
+        self.excel_row_height_spin.valueChanged.connect(self._update_excel_preview)
+        excel_row.addWidget(QLabel("열 너비"))
+        excel_row.addWidget(self.excel_col_width_spin)
+        excel_row.addWidget(QLabel("행 높이"))
+        excel_row.addWidget(self.excel_row_height_spin)
+        resize_form.addRow(excel_row)
+
+        self.excel_preview_label = QLabel()
+        resize_form.addRow(self.excel_preview_label)
+
+        excel_hint = QLabel(
+            "※ 엑셀에서 열 머리글 경계를 드래그할 때, 행 머리글 경계를 드래그할 때 표시되는 숫자를 그대로 입력하면 됩니다.\n"
+            "   (기본값은 엑셀의 기본 열너비/행높이. 실제 표시는 글꼴/화면 배율에 따라 약간 다를 수 있습니다)"
+        )
+        excel_hint.setWordWrap(True)
+        resize_form.addRow(excel_hint)
+
         root.addWidget(resize_box)
 
         # 단축키
@@ -130,6 +160,24 @@ class SettingsDialog(QDialog):
         hotkey_hint.setWordWrap(True)
         hotkey_form.addRow(hotkey_hint)
         root.addWidget(hotkey_box)
+
+        # 로그
+        log_box = QGroupBox("로그")
+        log_form = QFormLayout(log_box)
+        log_row = QHBoxLayout()
+        self.log_folder_edit = QLineEdit()
+        self.log_folder_browse_btn = QPushButton("찾아보기...")
+        self.log_folder_browse_btn.clicked.connect(self._browse_log_folder)
+        log_row.addWidget(self.log_folder_edit)
+        log_row.addWidget(self.log_folder_browse_btn)
+        log_form.addRow("로그 폴더", log_row)
+        log_hint = QLabel(
+            "문제가 생기면 이 폴더의 feel_capture.log 파일을 GitHub issue에 붙여넣어 주세요.\n"
+            "(비워두면 로그를 남기지 않습니다)"
+        )
+        log_hint.setWordWrap(True)
+        log_form.addRow(log_hint)
+        root.addWidget(log_box)
 
         # 영역 프리셋
         preset_box = QGroupBox("영역 모드 프리셋 (우클릭 메뉴에 표시됨)")
@@ -163,6 +211,16 @@ class SettingsDialog(QDialog):
         if folder:
             self.folder_edit.setText(folder)
 
+    def _browse_log_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "로그 폴더 선택", self.log_folder_edit.text())
+        if folder:
+            self.log_folder_edit.setText(folder)
+
+    def _update_excel_preview(self):
+        px_w = excel_col_width_to_px(self.excel_col_width_spin.value())
+        px_h = excel_row_height_to_px(self.excel_row_height_spin.value())
+        self.excel_preview_label.setText(f"≈ 셀 크기 {px_w} x {px_h} px (이 크기 안에 비율 유지하며 맞춤)")
+
     def _on_ext_changed(self, ext: str):
         is_record = ext in RECORD_EXTS
         self.fps_spin.setEnabled(is_record)
@@ -185,14 +243,21 @@ class SettingsDialog(QDialog):
             self.rb_resize_off.setChecked(True)
         elif resize_mode == "percent":
             self.rb_resize_percent.setChecked(True)
+        elif resize_mode == "excel":
+            self.rb_resize_excel.setChecked(True)
         else:
             self.rb_resize_fixed.setChecked(True)
         self.resize_w_spin.setValue(int(cfg.get("resize_width") or 0))
         self.resize_h_spin.setValue(int(cfg.get("resize_height") or 0))
         self.resize_percent_spin.setValue(int(cfg.get("resize_percent", 50)))
+        self.excel_col_width_spin.setValue(float(cfg.get("excel_col_width", 8.43)))
+        self.excel_row_height_spin.setValue(float(cfg.get("excel_row_height", 15.0)))
+        self._update_excel_preview()
 
         if cfg.get("hotkey"):
             self.hotkey_edit.setKeySequence(QKeySequence(cfg["hotkey"], QKeySequence.PortableText))
+
+        self.log_folder_edit.setText(cfg.get("log_folder", ""))
 
         presets = cfg.get("region_presets", [])
         for i, (name_edit, w_spin, h_spin) in enumerate(self.preset_widgets):
@@ -225,10 +290,16 @@ class SettingsDialog(QDialog):
 
         if self.rb_resize_off.isChecked():
             cfg["resize_enabled"] = False
+            cfg["resize_mode"] = "fixed"
         elif self.rb_resize_percent.isChecked():
             cfg["resize_enabled"] = True
             cfg["resize_mode"] = "percent"
             cfg["resize_percent"] = self.resize_percent_spin.value()
+        elif self.rb_resize_excel.isChecked():
+            cfg["resize_enabled"] = True
+            cfg["resize_mode"] = "excel"
+            cfg["excel_col_width"] = self.excel_col_width_spin.value()
+            cfg["excel_row_height"] = self.excel_row_height_spin.value()
         else:
             cfg["resize_enabled"] = True
             cfg["resize_mode"] = "fixed"
@@ -236,6 +307,8 @@ class SettingsDialog(QDialog):
             cfg["resize_height"] = self.resize_h_spin.value() or None
 
         cfg["hotkey"] = self.hotkey_edit.keySequence().toString(QKeySequence.PortableText).lower()
+
+        cfg["log_folder"] = self.log_folder_edit.text().strip()
 
         presets = []
         for i, (name_edit, w_spin, h_spin) in enumerate(self.preset_widgets):

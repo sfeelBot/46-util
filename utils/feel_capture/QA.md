@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-07-29 — (서브에이전트 독립 검증에서 발견) `SettingsDialog.result_config()`에서 "사용 안 함" 라디오 선택 시 `resize_mode`가 이전 값(예: "excel")으로 남아있음
+
+- **증상**: 리사이즈 모드가 "excel"(또는 "percent"/"fixed")로 저장된 설정을 열고, 리사이즈를 "사용 안 함"으로 바꿔 저장하면, 결과 config의 `resize_enabled`는 정확히 `False`가 되지만 `resize_mode`는 직전 값("excel" 등)이 그대로 남는다.
+  - 재현: `cfg_out`(resize_mode="excel", resize_enabled=True)로 `SettingsDialog`를 연 뒤 `rb_resize_off.setChecked(True)` → `result_config()` 결과가 `{"resize_enabled": False, "resize_mode": "excel", ...}`로, `resize_mode`가 "excel" 그대로 남음.
+- **원인**: `settings_dialog.py`의 `result_config()`에서 `rb_resize_percent`/`rb_resize_excel`/else(fixed) 분기는 각각 명시적으로 `cfg["resize_mode"] = "percent"/"excel"/"fixed"`를 설정하지만, `rb_resize_off` 분기(`if self.rb_resize_off.isChecked(): cfg["resize_enabled"] = False`)만 `resize_mode` 키를 건드리지 않는다. `cfg = dict(self.cfg)`로 다이얼로그 생성 시점의 원본 설정을 베이스로 복사해 시작하므로, 그 원본에 들어있던 `resize_mode` 값이 그대로 새어나간다.
+- **영향**: `capture_core.apply_resize()`는 `resize_enabled`를 가장 먼저 확인해 `False`면 즉시 원본 이미지를 반환하므로(`if not cfg.get("resize_enabled"): return img`), 실제 캡쳐/녹화 동작에는 영향이 없다(리사이즈가 실행되지 않음을 확인). 다이얼로그를 다시 열 때도 `_load_from_cfg()`가 `resize_enabled`를 먼저 확인해 `rb_resize_off`를 정확히 체크하므로 UI 표시도 정상이다. 따라서 **동작상 버그는 아니고, `config.json`에 저장되는 `resize_mode` 필드 값만 사용자가 마지막으로 선택했던 모드와 불일치하게 남는 낮은 심각도의 상태 불일치**다(수동으로 config.json을 읽어 `resize_mode`만 참고하는 외부 도구/스크립트가 있다면 오해할 소지는 있음).
+- **해결 (2026-07-29)**: `result_config()`의 `rb_resize_off` 분기에 `cfg["resize_mode"] = "fixed"`(스키마 기본값으로 리셋) 한 줄 추가. 재현 스크립트(resize_mode="excel"인 설정을 연 뒤 "사용 안 함"으로 전환)로 재검증 → 결과가 `{"resize_enabled": False, "resize_mode": "fixed", ...}`로 정상화됨을 확인.
+- **검증 방법**: `SettingsDialog`를 headless(`QT_QPA_PLATFORM=offscreen`)로 생성해 라디오 버튼을 프로그램적으로 클릭 후 `result_config()`를 직접 호출해 확인. `percent`/`fixed` 라디오로 전환한 경우는 각각 정상적으로 `resize_mode`가 갱신됨을 대조군으로 확인함(문제는 `off` 분기에만 있음).
+
+## 2026-07-29 — (서브에이전트 독립 검증, 버그 아님 — 참고사항) 엑셀 셀 크기 맞춤 리사이즈에서 극단적인 종횡비 + 아주 작은 셀 크기 조합 시, 정수 픽셀 반올림으로 인해 비율 오차가 "몇 퍼센트" 수준을 크게 초과할 수 있음
+
+- **증상**: `apply_resize(img, {"resize_mode": "excel", ...})`를 8종 이미지(정사각형/가로로 매우 긴 1000x50/세로로 매우 긴 50x1000/극단 5000x10, 10x5000 등) x 4종 박스 크기(기본 8.43자/15pt=64x20px, 20자/30pt=145x40px, 1자/5pt=12x7px, 50자/10pt=355x13px) 총 32개 조합으로 전수 테스트한 결과, **박스에 맞춘 출력 크기가 한쪽 변으로 1~7px까지 줄어드는 극단적 조합**(예: 1000x50 이미지 → 64x20 박스 → 결과 64x3px, 비율 오차 6.7%; 10x5000 이미지 → 355x13 박스 → 결과 1x13px, 비율 오차 3745%)에서 원본 비율과의 오차가 큼.
+  - 반면 정상적인 스크린샷 크기(800x600, 정사각형, 박스 크기의 정확한 배수 128x40 등)나 출력 변이 20px 이상인 조합은 모두 오차 0~2% 이내로 사실상 완벽하게 비율을 유지함(예: 800x600 → 64x20 박스 → 27x20, 오차 1.25%).
+  - `save_static_image()`를 통한 end-to-end 저장 경로에서도 동일한 패턴 재현됨(1000x50 이미지, 20자/30pt=145x40 박스 → 저장된 파일 145x7px, 비율 오차 3.57%). 저장된 파일 크기는 `apply_resize()`가 계산한 크기와 **항상 정확히 일치**함(이중 리사이즈나 불일치 없음 — 이 부분은 정상 확인).
+- **원인**: 코드 로직 버그가 아님. `_fit_within`은 `scale = min(box_w/img_w, box_h/img_h)` 단일 배율을 폭/높이에 동일하게 적용하는 올바른 "contain" 방식이지만(CSS `object-fit: contain`과 동일), 그 결과값을 정수 픽셀로 `round()`하는 과정에서 발생하는 오차는 결과 변의 절대 크기가 작을수록(예: 3px, 1px) 상대 오차가 커진다(0.5px의 반올림 오차가 3px 변에서는 약 15~17%까지 영향을 줄 수 있음). 이는 정수 픽셀 표현을 쓰는 모든 비율 유지 리사이즈 알고리즘에 공통되는 근본적 한계이며, 폭과 높이에 서로 다른 배율을 적용해서 생기는 "찌그러짐"이 아님 — 실제로 `scale_w`(=out_w/img_w)와 `scale_h`(=out_h/img_h)를 비교하면 항상 반올림 오차(최대 0.5px) 이내로 일치함을 확인함.
+- **실사용 영향**: 엑셀 셀 크기(기본 64x20px, 사용자 지정도 통상 수십~수백 px 범위)에 일반적인 스크린샷(가로/세로 비율이 극단적이지 않은, 수백~수천 px)을 맞추는 실사용 시나리오에서는 결과 변이 3px 미만으로 줄어드는 경우가 거의 없어 이 문제가 체감되지 않을 것으로 판단됨. 다만 아주 가늘고 긴 캡쳐(예: 좁은 툴바 하나만 1000px 폭에 50px 높이로 캡쳐하는 경우)를 아주 작은 커스텀 셀 크기(1자/5pt 같은 극단값)에 맞추면 체감 가능한 수준의 비율 오차가 발생할 수 있음.
+- **결론**: 버그로 분류하지 않음(사양대로 "비율을 절대 깨지 않는다"는 목표는 배율 계산 단계에서는 완벽히 지켜지고 있으며, 정수 픽셀 반올림은 별도 이슈). 참고로만 기록.
+- **검증 방법**: 8종 이미지 x 4종 박스 = 32개 조합 전수 테스트, 각 조합에 대해 (a) 출력이 박스를 넘지 않는지, (b) 비율 오차, (c) 최소 한 변이 박스 경계에 거의 닿는지(맥시멀 피팅 확인) 3가지를 모두 계산해 로그로 남김. 정상 범위 조합(총 32개 중 24개, 출력 변이 10px 이상인 경우)은 전부 오차 2% 이내로 확인, 나머지 8개(출력 변이 1~7px로 줄어드는 극단 조합)만 오차가 3.5%~3745%로 나타남 — 모두 "한쪽 변이 극단적으로 작아지는 경우"에 집중됨을 확인.
+
+---
+
+## 2026-07-29 — (사용자 발견) `build_exe.ps1` 실행 시 한글 안내 메시지가 깨져서 표시됨
+
+- **증상**: `utils\feel_capture\build_exe.ps1`을 실행하면 PyInstaller 로그 이후 출력되는 마지막 한글 안내("빌드 완료: ...", "exe 파일 하나만 옮겨서 실행하면 된다...")가 `鍮뚮뱶 ?꾨즺: ...`처럼 깨져서 나옴.
+- **원인**: 이 저장소에서 이미 한 번 겪었던 문제와 동일 — `github_sync_gui`의 QA.md에 기록된 "PowerShell 스크립트 한글 인코딩 깨짐"과 같은 근본 원인. `build_exe.ps1` 파일이 BOM 없는 UTF-8로 저장되어 있었는데, Windows PowerShell 5.1은 BOM이 없는 `.ps1` 파일을 시스템 기본 코드페이지(CP949)로 해석하기 때문에 파일 안의 UTF-8 한글 리터럴이 깨져 보임. `file`/`xxd`로 실제 확인: 파일 시작 바이트가 `3c 23`(BOM 없음)이었음.
+- **해결**: `Get-Content -Encoding UTF8 -Raw`로 올바르게 읽은 뒤 `Set-Content -Encoding UTF8`로 재저장 — Windows PowerShell 5.1의 `Set-Content -Encoding UTF8`은 BOM을 포함해서 쓰므로 이걸로 BOM 있는 UTF-8로 변환됨. 재저장 후 파일 시작 바이트가 `EF BB BF`(UTF-8 BOM)로 바뀐 것을 확인. 실제로 `build_exe.ps1`을 다시 실행해 마지막 한글 안내 두 줄이 정상적으로 "빌드 완료: ...", "exe 파일 하나만 옮겨서 실행하면 된다 (설치 과정 불필요, 트레이 상주)."로 출력되는 것을 확인함.
+- **주의**: 앞으로 이 저장소의 `.ps1` 파일(특히 한글 문자열이 있는 경우)을 수정할 때는 반드시 UTF-8 **with BOM**으로 저장되어 있는지 확인해야 한다. 일반 텍스트 편집 도구로 새로 만들거나 덮어쓰면 BOM 없이 저장되어 이 문제가 재발할 수 있다.
+
 ## 2026-07-23 — (개발 중 자체 발견) 스모크 테스트에서 녹화 완료 시그널이 수신되지 않는 것처럼 보임
 
 - **증상**: `RecorderThread`를 실제로 `.start()`시켜 gif 녹화 후 `.wait()`로 스레드 종료를 기다렸는데, 연결해둔 `finished_result` 콜백이 호출되지 않은 것처럼 보임(`results` 딕셔너리가 비어 있음).
@@ -100,3 +128,37 @@ CLAUDE.md 워크플로우에 따라 별도 에이전트가 위 개발자 자체 
   - (추가) locked 박스도 핸들 드래그 시 `(100,100)→(90,105)`로 정상 이동(크기 불변), locked 박스의 비핸들 내부/엣지 press는 `_hit_test`가 `None`을 반환해도 `mousePressEvent`의 `edge or "move"` 폴백으로 결국 `"move"`가 되어 여전히 이동 가능함을 확인(리사이즈만 비활성화되고 이동은 항상 가능 — 의도와 일치).
 - **exe 재빌드 + 실제(비-offscreen) 실행**: `build_exe.ps1` 재실행 → `dist\FeelCapture.exe` 재생성 확인(수정시각 2026-07-23 18:42:36, 크기 약 95MB). 재생성된 exe를 실제로 실행 → PyInstaller onefile 특성대로 부모(PID 8004)/자식(PID 26204) 2개 프로세스가 뜨는 것을 확인, 5초 후에도 둘 다 `Responding=True`로 크래시 없이 유지됨을 확인. 이후 두 PID 모두 `Stop-Process -Force`로 종료하고, `Get-Process -Name FeelCapture`로 재확인해 잔여 프로세스가 없음을 확인함(이전 세션의 leftover 프로세스 미정리 문제를 반복하지 않음).
 - **이번 검증으로 확인하지 못한 것**: 실제 사람이 마우스로 화면의 빨간 손잡이 바를 눈으로 보고 잡아 드래그했을 때 "이동이 쉬워지고 손잡이가 눈에 잘 띄는지"는 주관적 UX 판단이라 headless/합성 마우스 이벤트로는 검증할 수 없음 — 코드 레벨의 히트테스트/드래그 수학과 실제 프로세스 생존만 확인했으며, 이 UX 측면은 사람이 직접 실행해 확인해야 함.
+
+---
+
+## 검증 요약 (2026-07-29, 서브에이전트 독립 검증 — 로그/트레이클릭/엑셀리사이즈)
+
+CLAUDE.md 워크플로우에 따라 별도 에이전트가 v1.3에서 새로 추가된 3개 기능(`logger.py` 로그, 트레이 아이콘 클릭으로 설정 열기, "엑셀 셀 크기에 맞춤" 리사이즈)을 코드 미수정 원칙 하에 처음부터 다시 읽고 실제로 실행/조작해 독립 검증함. 격리된 임시 폴더/APPDATA만 사용했으며 실제 사용자 `%APPDATA%\FeelCapture\config.json`은 이번 검증으로 생성/변경되지 않았음(검증 종료 시점 `Test-Path`로 재확인, 여전히 존재하지 않음). 검증에 사용한 임시 프로세스/파일도 모두 정리했으며 종료 시점에 `python.exe`/`FeelCapture.exe` 잔여 프로세스가 없음을 확인함.
+
+**결론: 로그 기능·트레이 클릭 기능은 전 항목 정상 동작(버그 없음). 엑셀 리사이즈 기능은 핵심 로직(비율 유지, `save_static_image` 종단간 일치)이 정상이나, 설정 다이얼로그에 낮은 심각도 상태 불일치 버그 1건 발견(위 항목 기록, 실제 캡쳐 동작에는 영향 없음). 정수 픽셀 반올림에 의한 극단적 종횡비 오차는 버그가 아닌 것으로 판단해 별도 참고사항으로만 기록함(위 항목).**
+
+- **모듈 컴파일**: `py_compile`로 `logger.py`/`config.py`/`capture_core.py`/`main.py`/`settings_dialog.py`/`recorder.py`/`overlay_drag.py`/`overlay_region.py` 8개 파일 전체 재컴파일 성공.
+- **`build_exe.ps1` BOM 재확인**: 파일 시작 3바이트를 Python으로 직접 읽어 `b'\xef\xbb\xbf'`(UTF-8 BOM)임을 재확인(이전 수정이 유지되고 있음). 재빌드는 수행하지 않음(개발자가 이미 검증 완료).
+- **로그 기능 (`logger.py`, 27개 항목 전수 테스트, 전부 통과)**:
+  - `setup_logging(folder)` → `<folder>/feel_capture.log` 생성 확인, 로그 라인이 정확히 `YYYY-MM-DD HH:MM:SS,fff [LEVEL] feel_capture: message` 포맷과 일치함을 정규식으로 확인.
+  - 핸들러가 `logging.handlers.RotatingFileHandler` 인스턴스이며 `maxBytes==2097152(2MB)`, `backupCount==3`, `encoding=="utf-8"`임을 속성 직접 확인.
+  - `setup_logging("")` → `logger.handlers == []`, 이후 `logger.info(...)` 호출해도 예외 없음, 새 파일도 생성되지 않음을 확인.
+  - `setup_logging(folder1)` 후 `setup_logging(folder2)` 재호출 → 핸들러 리스트가 새 것 1개로 교체됨, `folder1`의 로그 파일은 이후 마커 문자열이 전혀 추가되지 않고 파일 크기도 그대로임(바이트 단위로 before/after 비교), `folder2` 파일에는 새 마커만 기록됨을 확인. 이전 핸들러의 내부 파일 스트림이 `close()`되어 있음도 확인.
+  - `log_environment_info(logger, "9.9-test")` → 실제 로그에 `OS: Windows-11-10.0.26200-SP0`, `Python: 3.12.10 ...`, `PyQt5: 5.15.11 / Qt: 5.15.2`, `실행 모드: python 스크립트`, 버전 문자열 `9.9-test` 모두 정확히 기록됨을 확인.
+  - `install_excepthook(logger)` → 실제로 예외를 발생시켜 `sys.excepthook`을 호출 → 로그에 `[CRITICAL]` 레벨로 `처리되지 않은 예외로 종료됨` 메시지와 `Traceback (most recent call last)` 전체 traceback, 예외 메시지(`boom-test-exception`)까지 기록됨을 확인, 이후 `sys.__excepthook__`(원래 처리)로 정상적으로 넘어감(monkeypatch로 호출 여부 확인)도 검증.
+  - `capture_core.save_static_image`: 존재하지 않는 확장자(`bogusext`)로 강제 저장 실패 유발 → 로그에 `정지 이미지 저장 실패: folder=... ext=bogusext` 라인과 함께 `PIL.Image.save`부터 이어지는 전체 traceback이 `log.exception`으로 기록됨을 확인.
+  - `recorder.RecorderThread.run()`: (1) `output_folder=""` → `log.error`로 `녹화 실패: 출력 폴더가 설정되지 않음` 기록(예외가 아니므로 traceback 없음, 사양과 일치). (2) `make_output_path`를 몽키패치해 강제로 예외 발생 → `녹화 실패: rect=(0,0,50,50) ext=mp4` 라인과 함께 `RuntimeError: synthetic-disk-error` 전체 traceback이 `log.exception`으로 기록됨을 확인.
+  - `config.DEFAULT_CONFIG["log_folder"]` 값이 실제로 `C:\Users\Feel\AppData\Roaming\FeelCapture\logs`(= `%APPDATA%\FeelCapture\logs`)임을 직접 확인.
+- **트레이 아이콘 클릭 (4개 항목 전수 테스트, 전부 통과)**: `QSystemTrayIcon.isSystemTrayAvailable`을 `True`로 몽키패치(이전 QA 라운드와 동일한 패턴)해 헤드리스로 `TrayApp`을 실제 생성, `open_settings`를 카운터 함수로 교체한 뒤 `_on_tray_activated()`를 4가지 reason으로 각각 호출:
+  - `QSystemTrayIcon.Trigger`(좌클릭) → `open_settings` 정확히 1회 호출됨.
+  - `QSystemTrayIcon.DoubleClick` → 1회 호출됨.
+  - `QSystemTrayIcon.Context`(우클릭) → **0회**(호출 안 됨, 컨텍스트 메뉴가 자체적으로 뜨므로 중복 오픈 없음을 확인).
+  - `QSystemTrayIcon.MiddleClick`(사양 외) → 0회, 의도치 않은 매칭 없음도 확인.
+- **엑셀 셀 크기 맞춤 리사이즈**:
+  - 변환 공식: `excel_col_width_to_px(8.43) == 64`, `excel_row_height_to_px(15) == 20` 정확히 확인(문서화된 엑셀 기본값과 일치).
+  - `apply_resize`를 8종 이미지(정사각/가로로 매우 김 1000x50/세로로 매우 김 50x1000/박스 비율의 정확한 배수 128x40/일반 사진 800x600/초소형 2x2/극단 5000x10·10x5000) x 4종 박스 크기(기본 64x20px, 커스텀 20자/30pt=145x40px, 극소 1자/5pt=12x7px, 극단가로 50자/10pt=355x13px) = 32개 조합 전수 테스트: 모든 조합에서 (a) 출력이 박스를 초과하지 않음, (c) 최소 한 변이 박스 경계에 닿아 맥시멀 피팅됨을 확인. (b) 비율 오차는 24/32 조합에서 2% 이내로 확인, 나머지 8개(출력 변이 1~7px로 줄어드는 극단 조합)만 오차가 컸음 — 원인 분석 결과 배율 자체는 폭/높이 동일하게 적용되고 있어 정수 픽셀 반올림에 의한 것으로 판단해 버그 아님으로 결론(위 참고사항 항목 참고).
+  - `excel_col_width`/`excel_row_height`가 없거나 0(falsy)인 경우 8.43/15.0 기본값으로 정확히 폴백됨을 확인.
+  - `save_static_image()` 종단간 테스트(가로로 긴/세로로 긴/정사각 3종 이미지, 20자/30pt 박스): 저장된 실제 파일을 PIL로 다시 열어 크기를 확인한 결과 `apply_resize()`가 계산한 크기와 **3종 모두 정확히 일치**(이중 리사이즈/불일치 없음).
+  - `percent` 모드 회귀 테스트(100x80 → 50% → 50x40) 정상 통과, 엑셀 모드 추가가 기존 모드에 영향 없음을 확인.
+  - `SettingsDialog`: `rb_resize_excel`/`excel_col_width_spin`/`excel_row_height_spin`(둘 다 실제로 `QDoubleSpinBox` 인스턴스)/`excel_preview_label` 존재 확인, 값 변경 시 미리보기 라벨이 `"≈ 셀 크기 64 x 20 px..."` → `"≈ 셀 크기 145 x 40 px..."`로 실시간 갱신됨을 확인. `result_config()`가 `resize_mode="excel"`/`excel_col_width`/`excel_row_height`를 정확히 왕복 저장하고, 저장된 cfg로 다이얼로그를 다시 열면 라디오/스핀박스 값이 그대로 복원됨을 확인. `percent`/`fixed` 라디오로 전환 시 `resize_mode`가 각각 정확히 갱신됨을 확인(대조군, 문제 없음). **단, `off` 라디오로 전환 시 `resize_mode`가 이전 값으로 남는 낮은 심각도 버그 1건 발견**(위 항목 기록, 동작에는 영향 없음).
+- **정리**: 이번 검증에서 사용한 모든 임시 디렉토리(`%TEMP%\feelcap_*`)와 임시 로그 파일, 헤드리스 `QApplication`/`TrayApp` 인스턴스를 테스트 스크립트 종료 시 정리함. 검증 종료 후 `Get-Process -Name python,FeelCapture` 결과가 비어 있음과 실제 사용자 `%APPDATA%\FeelCapture\config.json`이 존재하지 않음(이번 검증으로 생성되지 않음)을 최종 확인함.

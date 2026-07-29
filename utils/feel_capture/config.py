@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "FeelCapture"
+APP_VERSION = "1.3"
 
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -27,12 +28,15 @@ DEFAULT_CONFIG = {
     "output_folder": str(Path.home() / "Pictures" / "FeelCapture"),
     "extension": "png",
     "resize_enabled": False,
-    "resize_mode": "fixed",  # "fixed" | "percent"
+    "resize_mode": "fixed",  # "fixed" | "percent" | "excel"
     "resize_width": 1280,
     "resize_height": 720,
     "resize_percent": 50,
+    "excel_col_width": 8.43,  # 엑셀 열 너비 (문자 수, 기본값)
+    "excel_row_height": 15.0,  # 엑셀 행 높이 (포인트, 기본값)
     "hotkey": "ctrl+shift+s",
     "fps": 12,
+    "log_folder": str(CONFIG_DIR / "logs"),
     "region_box": {"x": 200, "y": 200, "w": 500, "h": 350, "locked": False},
     "region_presets": [
         {"name": "1920x1080", "w": 1920, "h": 1080},

@@ -54,10 +54,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Sync-FromGitHub.ps1
 - 이후 실행: GitHub의 최신 커밋 SHA를 `StateDir\last_sha.txt`와 비교해서, 같으면 아무것도 하지 않고 종료.
 - 강제로 다시 받고 싶을 때: `-Force`
 - `.venv`를 지우고 새로 만들고 싶을 때: `-RecreateVenv`
+- 여러 저장소를 각각 동기화하고 싶을 때(예: 저장소별로 이 스크립트를 각각 예약 작업에 등록): `-ConfigPath`로 저장소마다 다른 config.json을 지정. 생략하면 기존과 동일하게 스크립트와 같은 폴더의 `config.json`을 사용한다.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Sync-FromGitHub.ps1 -Force
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Sync-FromGitHub.ps1 -RecreateVenv
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Sync-FromGitHub.ps1 -ConfigPath "C:\path\to\other-config.json"
 ```
 
 로그는 `StateDir\sync.log`에 누적 기록된다. 단계(GitHub API 조회/ZIP 다운로드/ZIP 압축 해제/robocopy 반영/.venv 생성/pip install)가 바뀔 때마다 직전 단계 소요 시간이 `[단계 완료] <단계명>: N.N초` 형식으로 남고, 실행이 끝나면(성공/변경 없음/실패 어느 경우든) 마지막에 `총 소요 시간: N.N초`가 기록된다. 동기화가 느리게 느껴지면 이 로그로 어느 단계가 오래 걸리는지 바로 확인할 수 있다.

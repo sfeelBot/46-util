@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-08-26 — 여러 저장소를 탭으로 관리하는 기능(다중 프로필) 추가 중 발견: "전체 동기화"가 이미 실행 중인 탭과 경합
+
+- **증상**: 어떤 탭에서 "지금 바로 동기화"(수동)를 누른 직후, 아직 끝나기 전에 트레이의 "지금 동기화 (전체)"를 누르면 전체 동기화 결과가 꼬일 수 있음.
+- **원인**: `MainWindow.on_sync_all()`이 순차적으로 탭을 동기화할 때, 이미 `sync_process`가 있는(수동으로 먼저 시작된) 탭을 만나면 `RepoTab.on_sync_now(silent=True)`가 그 자리에서 즉시 `sync_finished(self, False, -1)`를 동기적으로 emit하고 다음 탭으로 넘어가도록 되어 있었음. 그런데 그 탭의 원래(수동) 동기화가 나중에 실제로 끝나면 `RepoTab.on_sync_finished`가 `sync_finished`를 다시 emit하고, `MainWindow._on_tab_sync_finished`는 `self._sync_all_pending is None` 여부만 확인해 여전히 리스트가 남아있으면 이를 "전체 동기화 체인의 정상적인 다음 완료"로 오인함 → 해당 탭이 결과에 중복 기록되고, 아직 실행 중인 다른 탭과 동시에 다음 탭을 또 시작시켜 "순차 동기화"라는 설계가 깨짐. 서브에이전트 정적 분석으로 발견 (실행 검증 전 코드 리뷰 단계).
+- **해결**: `MainWindow`에 `_sync_all_waiting_tab`(현재 전체-동기화 체인이 실제로 기다리고 있는 탭 1개)을 추가. `_sync_all_next()`가 이미 실행 중인 탭을 만나면 그 탭을 기다리지 않고 즉시 "건너뜀"으로 기록 후 다음으로 넘어가며, `_on_tab_sync_finished()`는 `tab is self._sync_all_waiting_tab`인 신호만 체인의 진행으로 인정하고 그 외(=바깥에서 이미 실행 중이던 수동 동기화가 뒤늦게 끝난 신호)는 무시한다. `RepoTab.on_sync_now()`의 "이미 실행 중이면 즉시 emit" 분기는 제거(호출자인 `MainWindow`가 실행 중 여부를 먼저 확인하도록 책임 이동).
+- **검증**: 서브에이전트가 헤드리스(`QT_QPA_PLATFORM=offscreen`, `LOCALAPPDATA`를 임시 폴더로 격리)로 `load_profiles`/`save_profiles` 마이그레이션(구버전 단일-저장소 config.json → `Profiles[0]`, `StateDir`/`DestDir` 보존 확인 포함), 실제 `MainWindow` 생성, 탭 추가(`on_add_profile`)/저장(`on_save_repo`)/삭제(`_remove_tab`, `QMessageBox.question` 모킹)를 실제로 실행해 검증 (수정 후 재검증은 컴파일 확인만 수행, 회귀 없음을 코드 리뷰로 확인). `Sync-FromGitHub.ps1`의 신규 `-ConfigPath` 파라미터도 PowerShell 파서로 문법 오류 없음을 확인.
+
 ## 검증 요약 (2026-07-13, 단계별 소요 시간 로그 + 완료 팝업)
 
 서브에이전트가 독립적으로 실제 실행하여 검증 (코드는 건드리지 않고 실행/테스트만 수행), 발견된 버그 없음.

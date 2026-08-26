@@ -9,15 +9,22 @@
 .PARAMETER RecreateVenv
     기존 .venv를 삭제하고 새로 생성한 뒤 반영한다 (평소에는 .venv를 보존만 함).
 
+.PARAMETER ConfigPath
+    사용할 config.json 경로. 생략하면 스크립트와 같은 폴더의 config.json을 사용한다.
+    저장소를 여러 개 관리할 때(github_sync_gui의 탭 기능 등) 각 저장소마다 별도의
+    config.json을 지정해 독립적으로 동기화할 수 있다.
+
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File Sync-FromGitHub.ps1
     powershell -NoProfile -ExecutionPolicy Bypass -File Sync-FromGitHub.ps1 -RecreateVenv
+    powershell -NoProfile -ExecutionPolicy Bypass -File Sync-FromGitHub.ps1 -ConfigPath "C:\path\to\other-config.json"
 #>
 
 [CmdletBinding()]
 param(
     [switch]$Force,
-    [switch]$RecreateVenv
+    [switch]$RecreateVenv,
+    [string]$ConfigPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,8 +33,11 @@ $ErrorActionPreference = "Stop"
 # (이게 없으면 Write-Host 출력이 시스템 기본 코드페이지(CP949 등)로 나가서, UTF-8로 읽는 쪽에서 한글이 깨진다.)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# ---- 설정: 스크립트와 같은 폴더의 config.json에서 읽는다 (없으면 기본값으로 생성) ----
-$ConfigPath = Join-Path $PSScriptRoot "config.json"
+# ---- 설정: -ConfigPath로 지정한 파일(여러 저장소를 각각 관리할 때 사용)에서 읽는다.
+#      지정하지 않으면 기존과 동일하게 스크립트와 같은 폴더의 config.json을 사용한다 (없으면 기본값으로 생성). ----
+if (-not $ConfigPath) {
+    $ConfigPath = Join-Path $PSScriptRoot "config.json"
+}
 
 $defaultConfig = [ordered]@{
     Owner     = "sfeelBot"

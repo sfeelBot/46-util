@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    github_sync_gui(main.py)를 단일 실행파일(exe)로 빌드한다.
+    github_sync_gui(main.py)를 단일 실행파일(github-sync-feel.exe)로 빌드한다.
     tools/github_sync/Sync-FromGitHub.ps1 스크립트와 assets/icon_on.ico 아이콘을 리소스로 함께 번들하여,
     exe 하나만 옮겨도 실행 시 %LOCALAPPDATA%\46util-sync\ 에 스크립트를 풀어놓고
     정상 동작하도록 한다. exe 자체의 아이콘도 assets/icon_on.ico로 지정된다.
@@ -33,7 +33,7 @@ try {
         --onefile `
         --windowed `
         --noconfirm `
-        --name "46util-sync-gui" `
+        --name "github-sync-feel" `
         --icon "$IconOn" `
         --add-data "$SyncScript;resources" `
         --add-data "$IconOn;resources" `
@@ -44,5 +44,5 @@ finally {
 }
 
 Write-Host ""
-Write-Host "빌드 완료: $PSScriptRoot\dist\46util-sync-gui.exe"
+Write-Host "빌드 완료: $PSScriptRoot\dist\github-sync-feel.exe"
 Write-Host "이 exe 파일 하나만 옮겨서 실행하면 된다 (설치 과정 불필요)."
